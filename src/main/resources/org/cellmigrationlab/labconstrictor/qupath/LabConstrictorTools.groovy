@@ -378,9 +378,13 @@ class LcDialog {
         def combo = choiceBoxes[name], field = controls[name]
         if (combo == null) return
         if (!options) { combo.visible = false; combo.managed = false; field.visible = true; field.managed = true; return }
-        def current = (field as TextField).text
-        combo.items.setAll([""] + options)
-        combo.value = options.contains(current) ? current : ""
+        def current = (field as TextField).text ?: ""
+        def param = currentTool.inputs.find { it.name == name } ?: [:]
+        // a blank entry means "no answer" (unset for an optional parameter, or when the field is empty); a value the field already
+        // holds (its default, or what was typed) stays selectable even when the source tool does not list it: never silently dropped
+        def entries = (param.nullable || !current ? [""] : []) + (current && !options.contains(current) ? [current] : []) + options
+        combo.items.setAll(entries)
+        combo.value = entries.contains(current) ? current : entries.first()
         field.visible = false; field.managed = false
         combo.visible = true; combo.managed = true
     }
