@@ -237,6 +237,7 @@ class LcDialog {
     Map<String, Stage> resultWindows = [:]        // app/tool -> its last results window (Replace reuses it)
     Map<String, String> imageChoiceAtRun = [:]    // image parameter -> what was chosen when the run started
     Map<String, Node> wrappers = [:]             // the node placed in the form for each parameter (enabled_when disables this one)
+    String lastCopied                              // the text the last Copy as command put on the clipboard (for tests)
     Map<String, ComboBox<String>> imageBoxes = [:]
     Map<String, String> imageOf = [:]            // pixel-size parameter -> image parameter
     LcWorker worker
@@ -278,7 +279,13 @@ class LcDialog {
         rescan.onAction = { rescan() }
         def restart = new Button("Restart worker")
         restart.onAction = { stopWorker(true); status.text = "worker stopped" }
-        def buttons = new HBox(6, cancelButton, rescan, restart, detailsButton)
+        def copyMenu = new MenuButton("Copy as command")
+        copyMenu.tooltip = new Tooltip("Copy what repeats this run outside QuPath: a terminal line or a Python snippet")
+        def terminalItem = new MenuItem("Terminal command"), pythonItem = new MenuItem("Python snippet")
+        terminalItem.onAction = { copyAsCommand("terminal") }
+        pythonItem.onAction = { copyAsCommand("python") }
+        copyMenu.items.addAll(terminalItem, pythonItem)
+        def buttons = new HBox(6, cancelButton, rescan, restart, detailsButton, copyMenu)
         def scroll = new ScrollPane(formBox)
         scroll.fitToWidth = true
         scroll.prefViewportHeight = 420
@@ -727,6 +734,72 @@ class LcDialog {
             def cal = source().pixelCalibration
             if (cal.hasPixelSizeMicrons()) setters[p.name](cal.pixelWidthMicrons)
         } catch (Exception ignored) { /* leave what is there */ }
+    }
+
+    // ---- Copy as command (same text as labconstrictor_tools.command)
+    static final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
+
+    static String shellQuote(String text, boolean windows) {
+        if (windows) return (text && text ==~ /[A-Za-z0-9_.:\/\\=+,-]+/) ? text : '"' + text.replace('"', '\\"') + '"'
+        return (text && text ==~ /[A-Za-z0-9_@%+=:,.\/-]+/) ? text : "'" + text.replace("'", "'\"'\"'") + "'"
+    }
+
+    /** The values a command line needs, in the tool's order: the file behind each image, else a placeholder; unset parameters are left out. */
+    Map commandValues() {
+        def values = [:], missing = [], notes = []
+        for (p in currentTool.inputs) {
+            def v = null
+            try { v = getters[p.name]() } catch (Exception ignored) { }
+            if (p.type in ["image", "labels"]) {
+                def path = null
+                if (v instanceof Map) {
+                    if (v.file) path = v.file as String
+                    else if (v.source != null) {
+                        try {
+                            def uri = v.source.call().getURIs()?.find { it.scheme == "file" }
+                            if (uri != null) path = new File(uri).path
+                        } catch (Exception ignored) { }
+                    }
+                    if (p.pick_channel && v.channel != null && v.channel >= 0) notes << ("# " + p.name + ": QuPath sent only channel " + (v.channel + 1) + "; the command sends the whole file")
+                }
+                v = path
+            }
+            if (v != null) values[p.name] = v
+            if (p.type in FILE_PLACEHOLDERS.keySet() && p.required && values[p.name] == null) { values[p.name] = FILE_PLACEHOLDERS[p.type]; missing << p.name }
+        }
+        return [values: values, missing: missing, notes: notes]
+    }
+
+    String commandText(String kind) {
+        def built = commandValues()
+        def app = apps[appBox.value]
+        def head = (built.missing ? ["# replace the file for: " + built.missing.join(", ")] : []) + built.notes
+        def note = head ? head.join("\n") + "\n" : ""
+        def given = currentTool.inputs.findAll { built.values.containsKey(it.name) }
+        if (kind == "python") {
+            def literal = { v -> v instanceof Boolean ? (v ? "True" : "False") : v instanceof Number ? v.toString() : "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'" }
+            def body = given ? "{\n" + given.collect { "    '" + it.name + "': " + literal(built.values[it.name]) + "," }.join("\n") + "\n}" : "{}"
+            return note + "from labconstrictor_tools import client\n\ntask = client.run_once('" + appBox.value + "', '" + currentTool.id + "', " + body + ")\n" +
+                   'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
+        }
+        boolean windows = System.getProperty("os.name").toLowerCase().contains("win")
+        def parts = [app.entry.python as String, "-m", "labconstrictor_tools", "run", appBox.value as String, currentTool.id as String].collect { shellQuote(it, windows) }
+        given.each { p ->
+            def v = built.values[p.name]
+            parts << shellQuote(p.name + "=" + (v instanceof Boolean ? (v ? "true" : "false") : v.toString()), windows)
+        }
+        return note + parts.join(" ")
+    }
+
+    String copyAsCommand(String kind) {
+        if (currentTool == null) return null
+        def text = commandText(kind)
+        def content = new javafx.scene.input.ClipboardContent()
+        content.putString(text)
+        javafx.scene.input.Clipboard.systemClipboard.setContent(content)
+        lastCopied = text
+        status.text = "copied the " + (kind == "python" ? "Python snippet" : "terminal command") + " to the clipboard"
+        return text
     }
 
     // ---- running
