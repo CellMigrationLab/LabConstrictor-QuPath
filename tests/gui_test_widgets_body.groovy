@@ -68,7 +68,7 @@ Thread.start("lc-gui-test") {
         shot("qp_widgets_1_form", dlg.stage)
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 120)
         println "STATUS " + status(dlg)
-        expect("values_reach_the_tool", fx { dlg.last != null || true } && (status(dlg).contains("spot") || status(dlg).contains("No spot") || status(dlg).contains("done")), status(dlg))
+        expect("run_completes_with_the_widget_values", status(dlg).contains("done"), status(dlg))
         shot("qp_widgets_2_after", dlg.stage)
     } catch (Throwable t) { t.printStackTrace() }
     finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
