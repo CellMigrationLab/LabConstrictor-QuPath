@@ -515,6 +515,19 @@ class LcDialog {
                 }
                 set = { box.value = it.toString() }
                 node = box; controls[name] = box
+                if (p.widget == "radio" && !p.nullable) {        // Widget("radio"): radio buttons that drive the (hidden) combo box, so every other rule keeps working
+                    def group = new ToggleGroup()
+                    def buttons = box.items.collect { item ->
+                        def rb = new RadioButton(item)
+                        rb.toggleGroup = group
+                        rb.selected = item == box.value
+                        rb.onAction = { box.value = item }
+                        rb
+                    }
+                    box.valueProperty().addListener({ o, a, b -> buttons.each { it.selected = it.text == b } } as javafx.beans.value.ChangeListener)
+                    box.visible = false; box.managed = false
+                    node = new HBox(12, *buttons, box)
+                }
                 break
             case "integer":
                 def lo = p.minimum != null ? (p.minimum as double).longValue() : -1000000000L
@@ -525,6 +538,24 @@ class LcDialog {
                 commitOnFocusLost(spinner)
                 get = { spinner.value }; set = { spinner.valueFactory.value = (it as double).intValue() }
                 node = spinner; controls[name] = spinner
+                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {   // Widget("slider"): a slider beside the typed box, kept in step
+                    def slider = new Slider(lo, hi, initial)
+                    slider.maxWidth = Double.MAX_VALUE
+                    HBox.setHgrow(slider, Priority.ALWAYS)
+                    boolean syncing = false
+                    slider.valueProperty().addListener({ o, a, b ->
+                        if (syncing) return
+                        syncing = true
+                        try { spinner.valueFactory.value = Math.round(b as double) as int } finally { syncing = false }
+                    } as javafx.beans.value.ChangeListener)
+                    spinner.valueProperty().addListener({ o, a, b ->
+                        if (syncing || b == null) return
+                        syncing = true
+                        try { slider.value = (b as double) } finally { syncing = false }
+                    } as javafx.beans.value.ChangeListener)
+                    spinner.prefWidth = 110
+                    node = new HBox(8, slider, spinner)
+                }
                 break
             case "float":
                 def lo = p.minimum != null ? p.minimum as double : -1e12d
@@ -536,6 +567,24 @@ class LcDialog {
                 commitOnFocusLost(spinner)
                 get = { spinner.value }; set = { spinner.valueFactory.value = it as double }
                 node = spinner; controls[name] = spinner
+                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {   // Widget("slider"): a slider beside the typed box, kept in step
+                    def slider = new Slider(lo, hi, initial)
+                    slider.maxWidth = Double.MAX_VALUE
+                    HBox.setHgrow(slider, Priority.ALWAYS)
+                    boolean syncing = false
+                    slider.valueProperty().addListener({ o, a, b ->
+                        if (syncing) return
+                        syncing = true
+                        try { spinner.valueFactory.value = (b as double) } finally { syncing = false }
+                    } as javafx.beans.value.ChangeListener)
+                    spinner.valueProperty().addListener({ o, a, b ->
+                        if (syncing || b == null) return
+                        syncing = true
+                        try { slider.value = (b as double) } finally { syncing = false }
+                    } as javafx.beans.value.ChangeListener)
+                    spinner.prefWidth = 110
+                    node = new HBox(8, slider, spinner)
+                }
                 break
             case "image":
             case "labels":
