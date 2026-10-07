@@ -17,6 +17,7 @@ Without the jar: open `src/main/resources/org/cellmigrationlab/labconstrictor/qu
 * **Image inputs**: the image open in QuPath, any image of the open project, or a file. QuPath's image is exported losslessly as TIFF (whole image). The pixel size of the chosen image fills the tool's pixel-size field (micrometres).
 * Results open in a window: values, tables (as a table), images (a preview, the path and an "Open in QuPath" button), alignment matrices, files, messages (also shown under the status line) and points.
 * **Interaction hints** of the manifest: a `choices_from` parameter is a dropdown filled by another tool of the app (a text field when that tool cannot answer), `clear_after_run` parameters are reset after a successful run, a `Collapsed` group is a folded section, and an output with `Replace()` reuses the results window of the tool instead of opening a new one.
+* **Channel selector**: an image input declared with `PickChannel()` gets a Channel chooser (the channel names of the chosen image, or of a file); the tool receives only that channel.
 * **Points** found in the image that is open in QuPath become a point annotation named `<app>:<output>` (replaced by the next run when the output declares `Replace()`); points of any other image are shown as a table.
 * "No match" is a message, not an error. Progress bar, Cancel (a tool that ignores it is killed after 3 s), worker kept between runs (or not), details of the last run, no worker left behind when the window closes.
 * Results are kept in `~/.labconstrictor/results/` (the newest 20), like the command line.
@@ -31,6 +32,8 @@ Without the jar: open `src/main/resources/org/cellmigrationlab/labconstrictor/qu
     QUPATH=/path/to/QuPath LC_HOME=<registry with NucleiSky and CellTracksColab> tests/run_gui_test.sh   # needs xvfb; 21 checks
 
 `BODY=gui_test_interactions_body.groovy tests/run_gui_test.sh` runs the interaction hints, messages and points against the example app of labconstrictor-tools (`labconstrictor_tools.examples.interactions`, registered in `LC_HOME`; 9 checks).
+
+`BODY=gui_test_channel_body.groovy tests/run_gui_test.sh` checks the channel chooser of `PickChannel` inputs with a 3-channel TIFF (the tool receives only the chosen channel; 4 checks).
 
 `BODY=gui_test_adversarial_body.groovy tests/run_gui_test.sh` throws odd input at the hints (a broken or malformed source tool, 5000 unicode options, a default the source does not list, empty and 50 000 points, a very long message, a failing run); register `tests/adversarial_app` as `adv` first (12 checks).
 
