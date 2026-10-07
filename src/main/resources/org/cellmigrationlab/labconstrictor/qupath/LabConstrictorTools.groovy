@@ -21,6 +21,7 @@ import javafx.stage.FileChooser
 import javafx.stage.Stage
 import qupath.lib.gui.QuPathGUI
 import qupath.lib.images.servers.ImageServers
+import qupath.lib.images.servers.TransformedServerBuilder
 import qupath.lib.images.writers.ImageWriterTools
 import qupath.lib.objects.PathObjects
 import qupath.lib.regions.ImagePlane
@@ -227,6 +228,7 @@ class LcDialog {
     Map<String, Closure> getters = [:]           // parameter name -> () -> value or null (omitted)
     Map<String, Closure> setters = [:]
     Map<String, Control> controls = [:]
+    Map<String, ComboBox<String>> channelBoxes = [:]   // PickChannel: the channel chooser of an image parameter
     Map<String, CheckBox> checks = [:]            // the 'set' box of each optional parameter
     Map<String, ComboBox<String>> choiceBoxes = [:]   // ChoicesFrom: the dropdown beside the text field
     Map<String, Integer> choiceSeq = [:]          // newest question per parameter: older answers are dropped
@@ -320,7 +322,7 @@ class LcDialog {
         currentTool = app?.schema?.tools?.find { it.label == toolBox.value }
         formBox.children.clear()
         getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); imageOf.clear()
-        checks.clear(); choiceBoxes.clear(); choiceSeq.clear()
+        checks.clear(); choiceBoxes.clear(); choiceSeq.clear(); channelBoxes.clear()
         description.text = currentTool?.description ?: ""
         if (currentTool == null) return
         buildForm(currentTool.inputs)
@@ -390,9 +392,13 @@ class LcDialog {
         def combo = choiceBoxes[name], field = controls[name]
         if (combo == null) return
         if (!options) { combo.visible = false; combo.managed = false; field.visible = true; field.managed = true; return }
-        def current = (field as TextField).text
-        combo.items.setAll([""] + options)
-        combo.value = options.contains(current) ? current : ""
+        def current = (field as TextField).text ?: ""
+        def param = currentTool.inputs.find { it.name == name } ?: [:]
+        // a blank entry means "no answer" (unset for an optional parameter, or when the field is empty); a value the field already
+        // holds (its default, or what was typed) stays selectable even when the source tool does not list it: never silently dropped
+        def entries = (param.nullable || !current ? [""] : []) + (current && !options.contains(current) ? [current] : []) + options
+        combo.items.setAll(entries)
+        combo.value = entries.contains(current) ? current : entries.first()
         field.visible = false; field.managed = false
         combo.visible = true; combo.managed = true
     }
@@ -553,14 +559,34 @@ class LcDialog {
                 box.value = p.required ? (sources ? sources.keySet().first() : FILE_CHOICE) : NO_IMAGE
                 imageBoxes[name] = box
                 def sourceMap = sources
+                def channelBox = p.pick_channel ? new ComboBox<String>() : null
+                if (channelBox != null) {                       // PickChannel: the channels (names) of the chosen image; the tool gets only the chosen one
+                    channelBox.maxWidth = Double.MAX_VALUE
+                    channelBoxes[name] = channelBox
+                    def refresh = {
+                        def names = []
+                        try {
+                            def server = box.value == FILE_CHOICE ? (fileField.text?.trim() ? ImageServers.buildServer(fileField.text.trim()) : null) : sourceMap[box.value]?.call()
+                            if (server != null) names = server.metadata.channels.collect { it.name as String }
+                        } catch (Exception ignored) { /* an unreadable file is reported when the run starts */ }
+                        channelBox.items.setAll(names.size() > 1 ? names : [])
+                        channelBox.value = names.size() > 1 ? names.first() : null
+                        channelBox.visible = channelBox.managed = names.size() > 1
+                    }
+                    box.valueProperty().addListener({ o, a, b -> refresh() } as javafx.beans.value.ChangeListener)
+                    fileField.focusedProperty().addListener({ o, a, focused -> if (!focused) refresh() } as javafx.beans.value.ChangeListener)
+                    Platform.runLater { refresh() }
+                }
                 get = {
                     def v = box.value
                     if (v == NO_IMAGE) return null
-                    if (v == FILE_CHOICE) return fileField.text?.trim() ? [file: fileField.text.trim()] : null
-                    return [source: sourceMap[v]]
+                    def channel = channelBox != null && channelBox.visible ? channelBox.items.indexOf(channelBox.value) : -1
+                    if (v == FILE_CHOICE) return fileField.text?.trim() ? [file: fileField.text.trim(), channel: channel] : null
+                    return [source: sourceMap[v], channel: channel]
                 }
                 set = { }
                 node = new HBox(6, box, fileField, browse)
+                if (channelBox != null) node = new VBox(2, node, new HBox(6, new Label("Channel"), channelBox))
                 HBox.setHgrow(box, Priority.SOMETIMES)
                 controls[name] = box
                 break
@@ -711,12 +737,19 @@ class LcDialog {
         values.each { name, v ->
             def p = params.find { it.name == name }
             if (p.type in ["image", "labels"]) {
-                if (v.file) {
+                if (v.file && !(p.pick_channel && v.channel != null && v.channel >= 0)) {
                     def f = new File(v.file as String)
                     if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
                     inputs[name] = f.absolutePath
                 } else {
-                    def server = v.source.call()
+                    def server
+                    if (v.file) {
+                        def f = new File(v.file as String)
+                        if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
+                        server = ImageServers.buildServer(f.absolutePath)
+                    } else server = v.source.call()
+                    if (p.pick_channel && v.channel != null && v.channel >= 0 && server.nChannels() > 1)       // PickChannel: only the chosen channel is exported
+                        server = new TransformedServerBuilder(server).extractChannels(v.channel as int).build()
                     def out = new File(tmp, name + ".tif")
                     ImageWriterTools.writeImageRegion(server, RegionRequest.createInstance(server), out.absolutePath)
                     inputs[name] = out.absolutePath
