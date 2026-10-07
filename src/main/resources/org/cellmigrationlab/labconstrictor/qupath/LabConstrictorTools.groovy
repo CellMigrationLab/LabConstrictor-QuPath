@@ -238,6 +238,7 @@ class LcDialog {
     Map<String, String> imageChoiceAtRun = [:]    // image parameter -> what was chosen when the run started
     Map<String, Node> wrappers = [:]             // the node placed in the form for each parameter (enabled_when disables this one)
     String lastCopied                              // the text the last Copy as command put on the clipboard (for tests)
+    Map<String, CheckBox> selectionBoxes = [:]       // RegionOf: the 'use the selection' box of a region parameter
     Map<String, ComboBox<String>> imageBoxes = [:]
     Map<String, String> imageOf = [:]            // pixel-size parameter -> image parameter
     LcWorker worker
@@ -328,7 +329,7 @@ class LcDialog {
         def app = apps[appBox.value]
         currentTool = app?.schema?.tools?.find { it.label == toolBox.value }
         formBox.children.clear()
-        getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); imageOf.clear()
+        getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); imageOf.clear(); selectionBoxes.clear()
         checks.clear(); choiceBoxes.clear(); choiceSeq.clear(); channelBoxes.clear()
         description.text = currentTool?.description ?: ""
         if (currentTool == null) return
@@ -633,7 +634,14 @@ class LcDialog {
                     fileField.focusedProperty().addListener({ o, a, focused -> if (!focused) refresh() } as javafx.beans.value.ChangeListener)
                     Platform.runLater { refresh() }
                 }
+                def selectionBox = p.region_of ? new CheckBox("use the selection") : null     // RegionOf: the selected annotations can be the value
+                if (selectionBox != null) {
+                    selectionBox.tooltip = new Tooltip("Send the selected annotations as the region (several are labels 1, 2, 3...)")
+                    selectionBox.selectedProperty().addListener({ o, a, on -> box.disable = on; fileField.disable = on } as javafx.beans.value.ChangeListener)
+                    selectionBoxes[name] = selectionBox
+                }
                 get = {
+                    if (selectionBox != null && selectionBox.selected) return [selection: true]
                     def v = box.value
                     if (v == NO_IMAGE) return null
                     def channel = channelBox != null && channelBox.visible ? channelBox.items.indexOf(channelBox.value) : -1
@@ -642,6 +650,7 @@ class LcDialog {
                 }
                 set = { }
                 node = new HBox(6, box, fileField, browse)
+                if (selectionBox != null) node = new VBox(2, node, selectionBox)
                 if (channelBox != null) node = new VBox(2, node, new HBox(6, new Label("Channel"), channelBox))
                 HBox.setHgrow(box, Priority.SOMETIMES)
                 controls[name] = box
@@ -678,7 +687,7 @@ class LcDialog {
                     node = new VBox(2, field, combo)
                 }
         }
-        if (p.nullable) {                      // optional without a default: unticked = the tool receives None
+        if (p.nullable && !p.region_of) {      // optional without a default: unticked = the tool receives None (a region has its own 'use the selection' box)
             def check = new CheckBox("set")
             checks[name] = check
             def control = node
@@ -752,7 +761,10 @@ class LcDialog {
             try { v = getters[p.name]() } catch (Exception ignored) { }
             if (p.type in ["image", "labels"]) {
                 def path = null
-                if (v instanceof Map) {
+                if (v instanceof Map && v.selection) {
+                    path = "region.tif"
+                    notes << ("# " + p.name + ": the selection cannot be copied; save it as a label image and put its path here")
+                } else if (v instanceof Map) {
                     if (v.file) path = v.file as String
                     else if (v.source != null) {
                         try {
@@ -854,11 +866,49 @@ class LcDialog {
         }
     }
 
+    static final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
+    static final long MAX_REGION_PIXELS = 100_000_000L   // the painted label image is held in memory
+
+    /** RegionOf: the selected annotations of the open image as a 16-bit label image the size of that image (labels 1..N, 0 outside).
+     *  Whatever makes that impossible is said to the person, never guessed around. */
+    File selectionMask(Map p, File tmp, String appName) {
+        def label = p.label as String
+        def chosen = imageChoiceAtRun[p.region_of]
+        def data = qupath?.imageData
+        if (data == null || chosen == null || !chosen.startsWith("Current image"))
+            throw new IllegalStateException("'" + label + "': the selection belongs to the image open in QuPath: choose 'Current image' for the image, or untick the selection")
+        def selected = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }
+        if (!selected) throw new IllegalStateException("'" + label + "': no annotation is selected: select one or more annotations, or untick the selection")
+        if (selected.size() > MAX_REGION_OBJECTS) throw new IllegalStateException("'" + label + "': " + selected.size() + " annotations are selected; at most " + MAX_REGION_OBJECTS + " are supported")
+        def server = data.server
+        int w = server.width, h = server.height
+        if ((long) w * h > MAX_REGION_PIXELS)
+            throw new IllegalStateException("'" + label + "': the image has " + (long) w * h + " pixels; a selection region is supported up to " + MAX_REGION_PIXELS + " (use a smaller image or a file)")
+        def painted = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)       // each object painted in the colour of its number (no anti-aliasing: pixel centres decide)
+        def g = painted.createGraphics()
+        try {
+            selected.eachWithIndex { obj, i -> g.setColor(new java.awt.Color(i + 1)); g.fill(obj.ROI.shape) }
+        } finally { g.dispose() }
+        def mask = new BufferedImage(w, h, BufferedImage.TYPE_USHORT_GRAY)
+        def raster = mask.raster
+        boolean any = false
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+            int objectNumber = painted.getRGB(x, y) & 0xFFFFFF
+            if (objectNumber != 0) { raster.setSample(x, y, 0, objectNumber); any = true }
+        }
+        if (!any) throw new IllegalStateException("'" + label + "': the selected annotations cover no pixel of the image")
+        def out = new File(tmp, p.name + ".tif")
+        ImageWriterTools.writeImage(mask, out.absolutePath)
+        return out
+    }
+
     Map prepareInputs(Map values, List params, File tmp, String appName, String toolId) {
         def inputs = new LinkedHashMap()
         values.each { name, v ->
             def p = params.find { it.name == name }
-            if (p.type in ["image", "labels"]) {
+            if (p.type in ["image", "labels"] && v instanceof Map && v.selection) {
+                inputs[name] = selectionMask(p, tmp, appName).absolutePath          // RegionOf: the selected annotations
+            } else if (p.type in ["image", "labels"]) {
                 if (v.file && !(p.pick_channel && v.channel != null && v.channel >= 0)) {
                     def f = new File(v.file as String)
                     if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
