@@ -20,8 +20,17 @@ import javafx.stage.DirectoryChooser
 import javafx.stage.FileChooser
 import javafx.stage.Stage
 import qupath.lib.gui.QuPathGUI
+import qupath.lib.images.servers.ImageServers
 import qupath.lib.images.writers.ImageWriterTools
+import qupath.lib.objects.PathObjects
+import qupath.lib.regions.ImagePlane
 import qupath.lib.regions.RegionRequest
+import qupath.lib.roi.ROIs
+import javafx.animation.PauseTransition
+import javafx.embed.swing.SwingFXUtils
+import javafx.scene.image.ImageView
+import javafx.util.Duration
+import java.awt.image.BufferedImage
 
 import java.nio.file.Files
 import java.util.concurrent.BlockingQueue
@@ -206,6 +215,13 @@ class LcDialog {
     Map<String, Closure> getters = [:]           // parameter name -> () -> value or null (omitted)
     Map<String, Closure> setters = [:]
     Map<String, Control> controls = [:]
+    Map<String, CheckBox> checks = [:]            // the 'set' box of each optional parameter
+    Map<String, ComboBox<String>> choiceBoxes = [:]   // ChoicesFrom: the dropdown beside the text field
+    Map<String, Integer> choiceSeq = [:]          // newest question per parameter: older answers are dropped
+    PauseTransition choiceTimer = new PauseTransition(Duration.millis(400))
+    Label messageLabel = new Label()              // message results of the last run
+    Map<String, Stage> resultWindows = [:]        // app/tool -> its last results window (Replace reuses it)
+    Map<String, String> imageChoiceAtRun = [:]    // image parameter -> what was chosen when the run started
     Map<String, Node> wrappers = [:]             // the node placed in the form for each parameter (enabled_when disables this one)
     Map<String, ComboBox<String>> imageBoxes = [:]
     Map<String, String> imageOf = [:]            // pixel-size parameter -> image parameter
@@ -254,7 +270,13 @@ class LcDialog {
         scroll.prefViewportHeight = 420
         scroll.prefViewportWidth = 600
         VBox.setVgrow(scroll, Priority.ALWAYS)
-        def root = new VBox(8, appBox, toolBox, description, scroll, runButton, progress, status, keepWorker, buttons)
+        messageLabel.wrapText = true
+        messageLabel.maxWidth = 560
+        messageLabel.style = "-fx-border-color: #5a9fd4; -fx-border-width: 0 0 0 3; -fx-padding: 4 8 4 8"
+        messageLabel.visible = false
+        messageLabel.managed = false
+        choiceTimer.onFinished = { resolveChoices() }
+        def root = new VBox(8, appBox, toolBox, description, scroll, runButton, progress, status, messageLabel, keepWorker, buttons)
         root.padding = new Insets(10)
         if (apps.isEmpty()) {
             status.text = "No LabConstrictor app is registered on this machine." + (problems ? " Skipped: " + problems.join("; ") : "")
@@ -286,9 +308,91 @@ class LcDialog {
         currentTool = app?.schema?.tools?.find { it.label == toolBox.value }
         formBox.children.clear()
         getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); imageOf.clear()
+        checks.clear(); choiceBoxes.clear(); choiceSeq.clear()
         description.text = currentTool?.description ?: ""
         if (currentTool == null) return
         buildForm(currentTool.inputs)
+        hookChoices()
+        scheduleChoices(0)
+    }
+
+    // ---- dynamic choices (ChoicesFrom), clear after run
+    void hookChoices() {
+        currentTool.inputs.findAll { it.choices_from }.each { p ->
+            p.choices_from.depends.each { dep ->
+                def control = controls[dep]
+                if (control instanceof TextField) control.textProperty().addListener({ o, a, b -> scheduleChoices(400) } as javafx.beans.value.ChangeListener)
+                else if (control instanceof ComboBox) control.valueProperty().addListener({ o, a, b -> scheduleChoices(400) } as javafx.beans.value.ChangeListener)
+            }
+        }
+    }
+
+    void scheduleChoices(int delayMs) {
+        if (choiceBoxes.isEmpty()) return
+        choiceTimer.duration = Duration.millis(Math.max(delayMs, 1))
+        choiceTimer.playFromStart()
+    }
+
+    void resolveChoices() {
+        if (currentTool == null || choiceBoxes.isEmpty()) return
+        if (running) { scheduleChoices(1500); return }              // the worker is busy with a run: ask again afterwards
+        def app = apps[appBox.value]
+        def appName = appBox.value
+        currentTool.inputs.findAll { it.choices_from && choiceBoxes[it.name] }.each { p ->
+            def request = new LinkedHashMap()
+            boolean ready = true
+            for (dep in p.choices_from.depends) {
+                def v = null
+                try { v = getters[dep]() } catch (Exception ignored) { }
+                def depParam = currentTool.inputs.find { it.name == dep }
+                if (v == null || v.toString().isEmpty() || (depParam.type == "folder" && !new File(v.toString()).isDirectory())) { ready = false; break }
+                request[dep] = v
+            }
+            def number = (choiceSeq[p.name] = (choiceSeq[p.name] ?: 0) + 1)
+            if (!ready) { applyChoices(p.name, number, null); return }
+            Thread.start("lc-choices") {
+                List options = null
+                def tmp = Files.createTempDirectory("lcqchoices_").toFile()
+                try {
+                    request["_job_dir"] = tmp.absolutePath
+                    if (worker == null || workerApp != appName || worker.closed || !worker.proc.isAlive()) {
+                        stopWorker(false)
+                        worker = new LcWorker(app.entry)
+                        workerApp = appName
+                    }
+                    def outcome = worker.run(p.choices_from.tool as String, request, null)
+                    if (outcome.responseType == "COMPLETION") {
+                        def found = (outcome.outputs?.results ?: []).find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
+                        options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
+                    }
+                } catch (Exception ignored) {
+                    // never blocks the form: the text field remains
+                } finally { tmp.deleteDir() }
+                Platform.runLater { applyChoices(p.name, number, options) }
+            }
+        }
+    }
+
+    void applyChoices(String name, int number, List options) {
+        if (choiceSeq[name] != number) return                         // a late answer for another question or form
+        def combo = choiceBoxes[name], field = controls[name]
+        if (combo == null) return
+        if (!options) { combo.visible = false; combo.managed = false; field.visible = true; field.managed = true; return }
+        def current = (field as TextField).text
+        combo.items.setAll([""] + options)
+        combo.value = options.contains(current) ? current : ""
+        field.visible = false; field.managed = false
+        combo.visible = true; combo.managed = true
+    }
+
+    /** ClearAfterRun parameters go back to their default (or unset) after a successful run. */
+    void clearAfterRun() {
+        currentTool.inputs.findAll { it.clear_after_run }.each { p ->
+            checks[p.name]?.selected = false
+            choiceBoxes[p.name]?.value = ""
+            def control = controls[p.name]
+            if (control instanceof TextField) control.text = p.default != null ? p.default.toString() : ""
+        }
     }
 
     // ---- images available in QuPath
@@ -311,10 +415,19 @@ class LcDialog {
     // ---- form
     void buildForm(List inputs) {
         def sources = imageSources()
-        def normal = inputs.findAll { !it.advanced }, advanced = inputs.findAll { it.advanced }
+        def shown = inputs.findAll { !it.advanced }, advanced = inputs.findAll { it.advanced }
+        def folded = shown.findAll { it.group_collapsed }.groupBy { it.group }          // accordion sections (Collapsed)
+        def normal = shown.findAll { !it.group_collapsed }
         def grid = newGrid()
         addRows(grid, normal, sources)
         formBox.children.add(grid)
+        folded.each { group, params ->
+            def foldedGrid = newGrid()
+            addRows(foldedGrid, params.collect { it + [group: null] }, sources)
+            def section = new TitledPane(group as String, foldedGrid)
+            section.expanded = false
+            formBox.children.add(section)
+        }
         if (advanced) {
             def advGrid = newGrid()
             addRows(advGrid, advanced, sources)
@@ -458,9 +571,22 @@ class LcDialog {
                 field.maxWidth = Double.MAX_VALUE
                 get = { field.text }; set = { field.text = it as String }
                 node = field; controls[name] = field
+                if (p.choices_from) {            // a dropdown where the source tool can answer, the text field where it cannot
+                    def combo = new ComboBox<String>()
+                    combo.maxWidth = Double.MAX_VALUE
+                    combo.visible = false; combo.managed = false
+                    combo.valueProperty().addListener({ o, a, b ->
+                        if (b == null) return
+                        field.text = b
+                        checks[name]?.selected = b != ""        // picking an option also sets an optional parameter
+                    } as javafx.beans.value.ChangeListener)
+                    choiceBoxes[name] = combo
+                    node = new VBox(2, field, combo)
+                }
         }
         if (p.nullable) {                      // optional without a default: unticked = the tool receives None
             def check = new CheckBox("set")
+            checks[name] = check
             def control = node
             control.disable = true
             check.selectedProperty().addListener({ o, a, on -> control.disable = !on } as javafx.beans.value.ChangeListener)
@@ -531,6 +657,8 @@ class LcDialog {
             }
             values[p.name] = v
         }
+        imageChoiceAtRun = imageBoxes.collectEntries { k, b -> [(k): b.value as String] }
+        messageLabel.visible = false; messageLabel.managed = false
         running = true
         runButton.disable = true
         cancelButton.disable = false
@@ -617,6 +745,8 @@ class LcDialog {
             def summary = results.findAll { it.type == "values" }.collect { r -> r.values.collect { k, v -> k + "=" + show(v) }.join(", ") }.join("; ")
             status.text = "done in " + String.format("%.1f", seconds) + "s  " + summary
             showResults(appName, toolLabel, results)
+            clearAfterRun()
+            scheduleChoices(200)          // a run may change what a source tool answers (e.g. a game was prepared)
         } else if (type == "CANCELATION") {
             status.text = "cancelled"
         } else if (type == "CRASH") {
@@ -667,9 +797,18 @@ class LcDialog {
                     r.values.each { k, v -> grid.add(new Label(k.toString()), 0, row); def l = new Label(show(v)); l.wrapText = true; grid.add(l, 1, row++) }
                     box.children.addAll(boldLabel(r.name ?: "values"), grid)
                     break
+                case "message":
+                    def text = (r.text as String).replaceAll(/\*\*(.+?)\*\*/, '$1')
+                    messageLabel.text = (messageLabel.text && messageLabel.visible ? messageLabel.text + "\n\n" : "") + text
+                    messageLabel.visible = true; messageLabel.managed = true
+                    break
+                case "points":
+                    box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String))
+                    break
                 case ["image", "labels"]:
                     def open = new Button("Open in QuPath")
                     def path = r.path as String
+                    try { box.children.add(previewNode(path, r.type == "labels")) } catch (Exception e) { box.children.add(new Label("(no preview: " + e.message + ")")) }
                     open.onAction = {
                         try { qupath.openImage(qupath.viewer, path, false, false) } catch (Exception e) { status.text = "cannot open: " + e.message }
                     }
@@ -689,16 +828,67 @@ class LcDialog {
                     box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ")"), new Label((r.path ?: r.toString()) as String))
             }
         }
-        def stage2 = new Stage()
+        def key = appName + "/" + toolLabel
+        def replacing = currentTool?.outputs?.any { it.replace } && resultWindows[key]?.showing
+        def stage2 = replacing ? resultWindows[key] : new Stage()     // Replace(): the next run's results take the place of the last ones
         stage2.title = appName + ": " + toolLabel
-        stage2.initOwner(stage)
+        if (!replacing) stage2.initOwner(stage)
         def sc = new ScrollPane(box)
         sc.fitToWidth = true
-        stage2.scene = new Scene(sc, 640, 520)
+        if (replacing) stage2.scene.root = sc else stage2.scene = new Scene(sc, 640, 520)
         stage2.show()
+        resultWindows[key] = stage2
         lastResultStage = stage2
     }
     Stage lastResultStage
+
+    /** Points go on the image they were found in when that was the image open in QuPath; otherwise only the table is shown. */
+    String placePoints(String appName, Map r) {
+        def data = qupath?.imageData
+        def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
+        def chosen = target ? imageChoiceAtRun[target] : null
+        if (data == null || chosen == null || !chosen.startsWith("Current image"))
+            return "Not placed on an image (the points were not found in the image open in QuPath)."
+        def lines = new File(r.path as String).readLines("UTF-8")
+        def header = splitCsv(lines[0])
+        def yi = header.indexOf("y"), xi = header.indexOf("x")
+        def ys = [], xs = []
+        lines.drop(1).each { line -> def cells = splitCsv(line); ys << (cells[yi] as double) + 0.5d; xs << (cells[xi] as double) + 0.5d }   // pixel centres
+        def name = appName + ":" + r.name
+        def hierarchy = data.hierarchy
+        def previous = hierarchy.annotationObjects.findAll { it.name == name }
+        if (previous && currentTool.outputs.any { it.name == r.name && it.replace }) hierarchy.removeObjects(previous, true)   // Replace()
+        def obj = PathObjects.createAnnotationObject(ROIs.createPointsROI(xs as double[], ys as double[], ImagePlane.getDefaultPlane()))
+        obj.name = name
+        hierarchy.addObject(obj)
+        return xs.size() + " point(s) added to the open image as the annotation '" + name + "'."
+    }
+
+    /** A small preview of a result image (first plane, first channel, scaled to the window); labels get a colour per label. */
+    static Node previewNode(String path, boolean labels) {
+        def server = ImageServers.buildServer(path)
+        double downsample = Math.max(1d, Math.max(server.width, server.height) / 560d)
+        def img = server.readRegion(RegionRequest.createInstance(server.path, downsample, 0, 0, server.width, server.height))
+        def raster = img.raster
+        int w = raster.width, h = raster.height
+        double lo = Double.MAX_VALUE, hi = -Double.MAX_VALUE
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { double v = raster.getSampleDouble(x, y, 0); if (v < lo) lo = v; if (v > hi) hi = v }
+        def out = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+            double v = raster.getSampleDouble(x, y, 0)
+            if (labels) {
+                out.setRGB(x, y, v == 0 ? 0 : java.awt.Color.HSBtoRGB((float) ((v * 0.61803398875d) % 1d), 0.7f, 0.95f))
+            } else {
+                int g = hi > lo ? (int) Math.round(255d * (v - lo) / (hi - lo)) : 0
+                out.setRGB(x, y, (g << 16) | (g << 8) | g)
+            }
+        }
+        def view = new ImageView(SwingFXUtils.toFXImage(out, null))
+        view.preserveRatio = true
+        view.smooth = false                                  // pixels stay square when a small result is enlarged
+        view.fitWidth = Math.min(560d, Math.max(w, 240d))
+        return view
+    }
 
     static Label boldLabel(String text) { def l = new Label(text); l.style = "-fx-font-weight: bold"; return l }
 
