@@ -33,6 +33,8 @@ Without the jar: open `src/main/resources/org/cellmigrationlab/labconstrictor/qu
 
 `BODY=gui_test_interactions_body.groovy tests/run_gui_test.sh` runs the interaction hints, messages and points against the example app of labconstrictor-tools (`labconstrictor_tools.examples.interactions`, registered in `LC_HOME`; 9 checks).
 
+`BODY=gui_test_playground_body.groovy tests/run_gui_test.sh` runs the tools of the LabConstrictor Playground app (check, device dropdown, big image, crash, no memory, 200 000 points; 8 checks; register the Playground in `LC_HOME` first).
+
 `BODY=gui_test_channel_body.groovy tests/run_gui_test.sh` checks the channel chooser of `PickChannel` inputs with a 3-channel TIFF (the tool receives only the chosen channel; 4 checks).
 
 `BODY=gui_test_adversarial_body.groovy tests/run_gui_test.sh` throws odd input at the hints (a broken or malformed source tool, 5000 unicode options, a default the source does not list, empty and 50 000 points, a very long message, a failing run); register `tests/adversarial_app` as `adv` first (12 checks).

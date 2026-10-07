@@ -125,7 +125,7 @@ class LcWorker {
                     }
                 }
             } catch (Exception ignored) { }
-            tasks.values().each { it.put([responseType: "CRASH", error: "the worker stopped (" + stderrText().takeRight(400).trim() + ")"]) }
+            tasks.values().each { it.put([responseType: "CRASH", error: crashText()]) }
         }
         Thread.start("lc-stderr") {
             try {
@@ -135,6 +135,18 @@ class LcWorker {
     }
 
     String stderrText() { stderrTail.toString() }
+
+    /** What to tell the person when the worker ends without answering: the likely cause from the exit code (same wording as the Python and Fiji hosts), then the worker's own last words. */
+    String crashText() {
+        Integer code = null
+        try { if (proc.waitFor(2, TimeUnit.SECONDS)) code = proc.exitValue() } catch (Exception ignored) { }
+        def hint = code in [-9, 137] ? "The worker was killed (out of memory? the OS ends big image jobs this way)."
+                 : code in [-11, 139, -1073741819] ? "The worker crashed natively (segmentation fault in a compiled library)."
+                 : code == 3 ? "The app's tool module failed to import (see the output below)."
+                 : "The worker process stopped unexpectedly."
+        def tail = stderrText().takeRight(400).trim()
+        return hint + (code != null ? " (exit code " + code + ")" : "") + (tail ? " " + tail : "")
+    }
 
     /** Sends one EXECUTE and blocks until its terminal message; `onUpdate` gets (message, current, maximum). */
     Map run(String toolId, Map inputs, Closure onUpdate) {
@@ -146,7 +158,7 @@ class LcWorker {
             while (true) {
                 def msg = queue.poll(1, TimeUnit.SECONDS)
                 if (msg == null) {
-                    if (!proc.isAlive()) return [responseType: "CRASH", error: "the worker stopped (" + stderrText().takeRight(400).trim() + ")"]
+                    if (!proc.isAlive()) return [responseType: "CRASH", error: crashText()]
                     continue
                 }
                 def type = msg.responseType
