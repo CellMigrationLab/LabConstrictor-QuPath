@@ -972,6 +972,9 @@ class LcDialog {
                 case "points":
                     box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String))
                     break
+                case "shapes":
+                    box.children.addAll(boldLabel((r.name ?: "shapes") + " (outlines)"), wrapped(placeShapes(appName, r)))
+                    break
                 case ["image", "labels"]:
                     def open = new Button("Open in QuPath")
                     def path = r.path as String
@@ -1029,6 +1032,57 @@ class LcDialog {
         obj.name = name
         hierarchy.addObject(obj)
         return xs.size() + " point(s) added to the open image as the annotation '" + name + "'."
+    }
+
+    static Label wrapped(String text) {
+        def l = new Label(text)
+        l.wrapText = true
+        return l
+    }
+
+    static final int MAX_SHAPES = 50000      // outlines added to the image; the rest are counted in the message
+
+    /** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) become annotations named "<app>:<output> <label>"
+     *  on the image they were found in (when that was the image open in QuPath); holes and parts are kept; numeric properties become
+     *  measurements. Replace() removes the previous annotations of this output. */
+    String placeShapes(String appName, Map r) {
+        def data = qupath?.imageData
+        def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
+        def chosen = target ? imageChoiceAtRun[target] : null
+        if (data == null || chosen == null || !chosen.startsWith("Current image"))
+            return "Not placed on an image (the outlines were not found in the image open in QuPath)."
+        def collection = new Gson().fromJson(new File(r.path as String).getText("UTF-8"), Map)
+        def factory = new org.locationtech.jts.geom.GeometryFactory()
+        def ring = { List points -> factory.createLinearRing(points.collect { new org.locationtech.jts.geom.Coordinate((it[0] as double) + 0.5d, (it[1] as double) + 0.5d) } as org.locationtech.jts.geom.Coordinate[]) }   // pixel centres
+        def prefix = appName + ":" + r.name
+        def objects = [], holes = 0, total = collection.features.size()
+        for (feature in collection.features) {
+            if (objects.size() >= MAX_SHAPES) break
+            def geometry = feature.geometry
+            def parts = geometry.type == "Polygon" ? [geometry.coordinates] : geometry.coordinates
+            def polygons = parts.collect { part ->
+                if (part.size() > 1) holes++
+                factory.createPolygon(ring(part[0] as List), part.drop(1).collect { ring(it as List) } as org.locationtech.jts.geom.LinearRing[])
+            }
+            def shape = polygons.size() == 1 ? polygons[0] : factory.createMultiPolygon(polygons as org.locationtech.jts.geom.Polygon[])
+            def obj = PathObjects.createAnnotationObject(qupath.lib.roi.GeometryTools.geometryToROI(shape, ImagePlane.getDefaultPlane()))
+            def label = feature.get("properties")?.get("label")   // .get(): on a map, Groovy's feature.properties and feature["properties"] give the bean properties, not the JSON key
+            if (label instanceof Number && (label as double) == Math.floor(label as double)) label = (label as double).longValue()      // Gson reads every number as a double: 1.0 -> 1
+            obj.name = prefix + " " + (label != null ? label : objects.size() + 1)
+            feature.get("properties")?.each { k, v -> if (v instanceof Number) obj.measurementList.put(k.toString(), v as double) }   // numeric properties become measurements
+            objects << obj
+        }
+        def hierarchy = data.hierarchy
+        def replacing = currentTool.outputs.any { it.name == r.name && it.replace }
+        if (replacing) {
+            def previous = hierarchy.annotationObjects.findAll { it.name?.startsWith(prefix + " ") }
+            if (previous) hierarchy.removeObjects(previous, true)       // Replace()
+        }
+        hierarchy.addObjects(objects)
+        def text = objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>'."
+        if (total > MAX_SHAPES) text += " Showing the first " + MAX_SHAPES + " of " + total + "."
+        if (holes) text += " " + holes + " outline(s) have holes (kept)."
+        return text
     }
 
     /** A small preview of a result image (first plane, first channel, scaled to the window); labels get a colour per label. */
