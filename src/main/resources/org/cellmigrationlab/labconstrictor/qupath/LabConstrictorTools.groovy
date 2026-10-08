@@ -421,11 +421,7 @@ class LcDialog {
                 def tmp = Files.createTempDirectory("lcqchoices_").toFile()
                 try {
                     request["_job_dir"] = tmp.absolutePath
-                    if (worker == null || workerApp != appName || worker.closed || !worker.proc.isAlive()) {
-                        stopWorker(false)
-                        worker = new LcWorker(app.entry)
-                        workerApp = appName
-                    }
+                    ensureWorker(app, appName)
                     def outcome = worker.run(p.choices_from.tool as String, request, null)
                     if (outcome.responseType == "COMPLETION") {
                         def found = (outcome.outputs?.results ?: []).find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
@@ -856,51 +852,59 @@ class LcDialog {
                 LcLog.warn("command line: could not read '" + p.name + "' (left out)", e)
                 notes << ("# " + p.name + ": the value could not be read (" + e.message + "); it is left out")
             }
-            if (p.type in ["image", "labels"]) {
-                def path = null
-                if (v instanceof Map && v.selection) {
-                    path = "region.tif"
-                    notes << ("# " + p.name + ": the selection cannot be copied; save it as a label image and put its path here")
-                } else if (v instanceof Map) {
-                    if (v.file) path = v.file as String
-                    else if (v.source != null) {
-                        try {
-                            def uri = v.source.call().getURIs()?.find { it.scheme == "file" }
-                            if (uri != null) path = new File(uri).path
-                        } catch (Exception e) {      // broad on purpose: the image getter is QuPath's; the command still gets a placeholder
-                            LcLog.warn("command line: no file for the image of '" + p.name + "'", e)
-                            notes << ("# " + p.name + ": the image file could not be determined (" + e.message + ")")
-                        }
-                    }
-                    if (p.pick_channel && v.channel != null && v.channel >= 0) notes << ("# " + p.name + ": QuPath sent only channel " + (v.channel + 1) + "; the command sends the whole file")
-                }
-                v = path
-            }
+            if (p.type in ["image", "labels"]) v = commandImagePath(p, v, notes)
             if (v != null) values[p.name] = v
             if (p.type in FILE_PLACEHOLDERS.keySet() && p.required && values[p.name] == null) { values[p.name] = FILE_PLACEHOLDERS[p.type]; missing << p.name }
         }
         return [values: values, missing: missing, notes: notes]
     }
 
+    /** The file a command line names for an image value: the file typed, or the file behind a QuPath image; null (with a note) when there is none. */
+    String commandImagePath(Map p, def v, List notes) {
+        String path = null
+        if (v instanceof Map && v.selection) {
+            path = "region.tif"
+            notes << ("# " + p.name + ": the selection cannot be copied; save it as a label image and put its path here")
+        } else if (v instanceof Map) {
+            if (v.file) path = v.file as String
+            else if (v.source != null) {
+                try {
+                    def uri = v.source.call().getURIs()?.find { it.scheme == "file" }
+                    if (uri != null) path = new File(uri).path
+                } catch (Exception e) {      // broad on purpose: the image getter is QuPath's; the command still gets a placeholder
+                    LcLog.warn("command line: no file for the image of '" + p.name + "'", e)
+                    notes << ("# " + p.name + ": the image file could not be determined (" + e.message + ")")
+                }
+            }
+            if (p.pick_channel && v.channel != null && v.channel >= 0) notes << ("# " + p.name + ": QuPath sent only channel " + (v.channel + 1) + "; the command sends the whole file")
+        }
+        return path
+    }
+
     String commandText(String kind) {
         def built = commandValues()
-        def app = apps[appBox.value]
         def head = (built.missing ? ["# replace the file for: " + built.missing.join(", ")] : []) + built.notes
         def note = head ? head.join("\n") + "\n" : ""
         def given = currentTool.inputs.findAll { built.values.containsKey(it.name) }
-        if (kind == "python") {
-            def literal = { v -> v instanceof Boolean ? (v ? "True" : "False") : v instanceof Number ? v.toString() : "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'" }
-            def body = given ? "{\n" + given.collect { "    '" + it.name + "': " + literal(built.values[it.name]) + "," }.join("\n") + "\n}" : "{}"
-            return note + "from labconstrictor_tools import client\n\ntask = client.run_once('" + appBox.value + "', '" + currentTool.id + "', " + body + ")\n" +
-                   'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
-        }
+        return note + (kind == "python" ? pythonSnippet(given, built.values) : terminalCommand(given, built.values))
+    }
+
+    String pythonSnippet(List given, Map values) {
+        def literal = { v -> v instanceof Boolean ? (v ? "True" : "False") : v instanceof Number ? v.toString() : "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'" }
+        def body = given ? "{\n" + given.collect { "    '" + it.name + "': " + literal(values[it.name]) + "," }.join("\n") + "\n}" : "{}"
+        return "from labconstrictor_tools import client\n\ntask = client.run_once('" + appBox.value + "', '" + currentTool.id + "', " + body + ")\n" +
+               'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
+    }
+
+    String terminalCommand(List given, Map values) {
+        def app = apps[appBox.value]
         boolean windows = System.getProperty("os.name").toLowerCase().contains("win")
         def parts = [app.entry.python as String, "-m", "labconstrictor_tools", "run", appBox.value as String, currentTool.id as String].collect { shellQuote(it, windows) }
         given.each { p ->
-            def v = built.values[p.name]
+            def v = values[p.name]
             parts << shellQuote(p.name + "=" + (v instanceof Boolean ? (v ? "true" : "false") : v.toString()), windows)
         }
-        return note + parts.join(" ")
+        return parts.join(" ")
     }
 
     String copyAsCommand(String kind) {
@@ -914,22 +918,34 @@ class LcDialog {
         return text
     }
 
-    // ---- running
-    void run() {
-        if (running || currentTool == null) return
-        def toolId = currentTool.id as String
-        def app = apps[appBox.value]
+    // ---- the request: what the form asks for
+    /** The values of the form in the tool's order, or null (with the reason in the status line) when one cannot be read or a required one is missing. */
+    Map readFormValues() {
         def values = new LinkedHashMap()
         for (p in currentTool.inputs) {
             def v
-            try { v = getters[p.name]() } catch (Exception e) { LcLog.warn("could not read '" + p.name + "'", e); status.text = "Check '" + p.label + "': " + e.message; return }
+            try { v = getters[p.name]() } catch (Exception e) { LcLog.warn("could not read '" + p.name + "'", e); status.text = "Check '" + p.label + "': " + e.message; return null }
             if (v == null) {
-                if (p.required && !p.nullable && p.type in ["image", "labels", "table", "file", "folder", "string"]) { status.text = "'" + p.label + "' is required."; return }
+                if (p.required && !p.nullable && p.type in ["image", "labels", "table", "file", "folder", "string"]) { status.text = "'" + p.label + "' is required."; return null }
                 continue
             }
             values[p.name] = v
         }
+        return values
+    }
+
+    // ---- running
+    void run() {
+        if (running || currentTool == null) return
+        def values = readFormValues()
+        if (values == null) return
         imageChoiceAtRun = imageBoxes.collectEntries { k, b -> [(k): b.value as String] }
+        showRunning()
+        runInBackground(values)
+    }
+
+    /** The form goes busy: Run off, Cancel on, an indeterminate progress bar. */
+    void showRunning() {
         messageLabel.visible = false; messageLabel.managed = false
         running = true
         runButton.disable = true
@@ -937,35 +953,61 @@ class LcDialog {
         detailsButton.disable = true
         progress.progress = ProgressBar.INDETERMINATE_PROGRESS
         status.text = "starting..."
+    }
+
+    /** The form is free again after a run. */
+    void showIdle() {
+        running = false
+        runButton.disable = false
+        cancelButton.disable = true
+        detailsButton.disable = false
+        progress.progress = 0
+    }
+
+    /** The worker is started (or replaced) when there is none for this app, or it has died. */
+    void ensureWorker(Map app, String appName) {
+        if (worker == null || workerApp != appName || worker.closed || !worker.proc.isAlive()) {
+            stopWorker(false)
+            worker = new LcWorker(app.entry)
+            workerApp = appName
+        }
+    }
+
+    void runInBackground(Map values) {
+        def toolId = currentTool.id as String
+        def app = apps[appBox.value]
         def appName = appBox.value
         def toolLabel = currentTool.label
+        def toolInputs = currentTool.inputs
         Thread.start("lc-run") {
             def t0 = System.nanoTime()
-            Map outcome
-            def tmp = Files.createTempDirectory("lcqupath_").toFile()
-            try {
-                def inputs = prepareInputs(values, currentTool.inputs, tmp, appName, toolId)
-                if (worker == null || workerApp != appName || worker.closed || !worker.proc.isAlive()) {
-                    stopWorker(false)
-                    worker = new LcWorker(app.entry)
-                    workerApp = appName
-                }
-                outcome = worker.run(toolId, inputs) { message, current, maximum ->
-                    Platform.runLater {
-                        status.text = message
-                        progress.progress = (current != null && maximum) ? (current as double) / (maximum as double) : ProgressBar.INDETERMINATE_PROGRESS
-                    }
-                }
-            } catch (Exception e) {
-                // broad on purpose (isolation boundary of the run thread): any failure becomes the outcome the person reads (status line and Details, with the stack trace)
-                LcLog.warn("run of '" + toolId + "' failed on the host", e)
-                outcome = [responseType: "FAILURE", error: e.class.simpleName + ": " + e.message, code: "host_error", trace: LcLog.trace(e)]
-            } finally {
-                LcLog.deleteTemp(tmp)
-            }
+            Map outcome = runOnWorker(app, appName, toolId, toolInputs, values)
             def seconds = (System.nanoTime() - t0) / 1e9
             Platform.runLater { finish(appName, toolLabel, outcome, seconds) }
         }
+    }
+
+    /** One run on the worker thread; every failure becomes the outcome the person reads. */
+    Map runOnWorker(Map app, String appName, String toolId, List toolInputs, Map values) {
+        Map outcome
+        def tmp = Files.createTempDirectory("lcqupath_").toFile()
+        try {
+            def inputs = prepareInputs(values, toolInputs, tmp, appName, toolId)
+            ensureWorker(app, appName)
+            outcome = worker.run(toolId, inputs) { message, current, maximum ->
+                Platform.runLater {
+                    status.text = message
+                    progress.progress = (current != null && maximum) ? (current as double) / (maximum as double) : ProgressBar.INDETERMINATE_PROGRESS
+                }
+            }
+        } catch (Exception e) {
+            // broad on purpose (isolation boundary of the run thread): any failure becomes the outcome the person reads (status line and Details, with the stack trace)
+            LcLog.warn("run of '" + toolId + "' failed on the host", e)
+            outcome = [responseType: "FAILURE", error: e.class.simpleName + ": " + e.message, code: "host_error", trace: LcLog.trace(e)]
+        } finally {
+            LcLog.deleteTemp(tmp)
+        }
+        return outcome
     }
 
     static final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
@@ -986,6 +1028,15 @@ class LcDialog {
         int w = server.width, h = server.height
         if ((long) w * h > MAX_REGION_PIXELS)
             throw new IllegalStateException("'" + label + "': the image has " + (long) w * h + " pixels; a selection region is supported up to " + MAX_REGION_PIXELS + " (use a smaller image or a file)")
+        def mask = paintLabelMask(selected, w, h)
+        if (mask == null) throw new IllegalStateException("'" + label + "': the selected annotations cover no pixel of the image")
+        def out = new File(tmp, p.name + ".tif")
+        ImageWriterTools.writeImage(mask, out.absolutePath)
+        return out
+    }
+
+    /** The objects painted as a 16-bit label image (object i has label i + 1), or null when none covers a pixel. */
+    static BufferedImage paintLabelMask(Collection selected, int w, int h) {
         def painted = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)       // each object painted in the colour of its number (no anti-aliasing: pixel centres decide)
         def g = painted.createGraphics()
         try {
@@ -998,52 +1049,53 @@ class LcDialog {
             int objectNumber = painted.getRGB(x, y) & 0xFFFFFF
             if (objectNumber != 0) { raster.setSample(x, y, 0, objectNumber); any = true }
         }
-        if (!any) throw new IllegalStateException("'" + label + "': the selected annotations cover no pixel of the image")
-        def out = new File(tmp, p.name + ".tif")
-        ImageWriterTools.writeImage(mask, out.absolutePath)
-        return out
+        return any ? mask : null
     }
 
     Map prepareInputs(Map values, List params, File tmp, String appName, String toolId) {
         def inputs = new LinkedHashMap()
-        values.each { name, v ->
-            def p = params.find { it.name == name }
-            if (p.type in ["image", "labels"] && v instanceof Map && v.selection) {
-                inputs[name] = selectionMask(p, tmp, appName).absolutePath          // RegionOf: the selected annotations
-            } else if (p.type in ["image", "labels"]) {
-                if (v.file && !(p.pick_channel && v.channel != null && v.channel >= 0)) {
-                    def f = new File(v.file as String)
-                    if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
-                    inputs[name] = f.absolutePath
-                } else {
-                    def server
-                    if (v.file) {
-                        def f = new File(v.file as String)
-                        if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
-                        server = ImageServers.buildServer(f.absolutePath)
-                    } else server = v.source.call()
-                    if (p.pick_channel && v.channel != null && v.channel >= 0 && server.nChannels() > 1)       // PickChannel: only the chosen channel is exported
-                        server = new TransformedServerBuilder(server).extractChannels(v.channel as int).build()
-                    def out = new File(tmp, name + ".tif")
-                    ImageWriterTools.writeImageRegion(server, RegionRequest.createInstance(server), out.absolutePath)
-                    inputs[name] = out.absolutePath
-                }
-            } else if (p.type in ["file", "table", "folder"]) {
-                def f = new File(v as String)
-                if (!f.exists()) throw new FileNotFoundException("file not found: " + f)
-                inputs[name] = f.absolutePath
-            } else {
-                inputs[name] = v
-            }
+        values.each { name, v -> inputs[name] = prepareInput(params.find { it.name == name }, name as String, v, tmp, appName) }
+        inputs["_job_dir"] = newJobDir(appName, toolId).absolutePath
+        return inputs
+    }
+
+    /** What the tool receives for one value: images are exported (or the file's path is passed), files are checked, the rest passes unchanged. */
+    Object prepareInput(Map p, String name, Object v, File tmp, String appName) {
+        if (p.type in ["image", "labels"]) return prepareImageInput(p, name, v, tmp, appName)
+        if (p.type in ["file", "table", "folder"]) {
+            def f = new File(v as String)
+            if (!f.exists()) throw new FileNotFoundException("file not found: " + f)
+            return f.absolutePath
         }
-        // results go to a host-owned folder next to the ones the command line makes (the newest 20 are kept)
+        return v
+    }
+
+    String prepareImageInput(Map p, String name, Map v, File tmp, String appName) {
+        if (v.selection) return selectionMask(p, tmp, appName).absolutePath          // RegionOf: the selected annotations
+        boolean oneChannel = p.pick_channel && v.channel != null && v.channel >= 0
+        if (v.file && !oneChannel) return existingFile(v.file as String).absolutePath
+        def server = v.file ? ImageServers.buildServer(existingFile(v.file as String).absolutePath) : v.source.call()
+        if (oneChannel && server.nChannels() > 1)       // PickChannel: only the chosen channel is exported
+            server = new TransformedServerBuilder(server).extractChannels(v.channel as int).build()
+        def out = new File(tmp, name + ".tif")
+        ImageWriterTools.writeImageRegion(server, RegionRequest.createInstance(server), out.absolutePath)
+        return out.absolutePath
+    }
+
+    static File existingFile(String path) {
+        def f = new File(path)
+        if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
+        return f
+    }
+
+    /** Results go to a host-owned folder next to the ones the command line makes (the newest 20 are kept). */
+    static File newJobDir(String appName, String toolId) {
         def root = new File(LcRegistry.searchPath().first().parentFile, "results")
         def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss").format(new Date())
         def job = new File(root, stamp + "_" + System.nanoTime().toString().takeRight(6) + "_" + appName + "_" + toolId)
         job.mkdirs()
         (root.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: []).sort { it.name }.reverse().drop(20).each { it.deleteDir() }
-        inputs["_job_dir"] = job.absolutePath
-        return inputs
+        return job
     }
 
     void cancel() {
@@ -1051,40 +1103,46 @@ class LcDialog {
         worker?.cancel()
     }
 
+    // ---- results
     void finish(String appName, String toolLabel, Map outcome, double seconds) {
-        running = false
-        runButton.disable = false
-        cancelButton.disable = true
-        detailsButton.disable = false
-        progress.progress = 0
+        showIdle()
         def type = outcome.responseType
         lastReport = LcJson.pretty(outcome) + "\n\nworker output:\n" + (worker?.stderrText() ?: "")
         if (type == "COMPLETION") {
-            def results = outcome.outputs?.results ?: []
-            def summary = results.findAll { it.type == "values" }.collect { r -> r.values.collect { k, v -> k + "=" + show(v) }.join(", ") }.join("; ")
-            status.text = "done in " + String.format("%.1f", seconds) + "s  " + summary
-            showResults(appName, toolLabel, results)
-            clearAfterRun()
-            scheduleChoices(200)          // a run may change what a source tool answers (e.g. a game was prepared)
+            finishCompleted(appName, toolLabel, outcome, seconds)
         } else if (type == "CANCELATION") {
             status.text = "cancelled"
         } else if (type == "CRASH") {
             status.text = "the worker stopped: " + outcome.error
             stopWorker(true)
         } else {
-            def code = outcome.code
-            def error = outcome.error as String
-            if (code in ["no_match", "no_result"]) {
-                status.text = "no result: " + error.replaceFirst(/^\[[^\]]*\]\s*/, "")
-                def a = new Alert(Alert.AlertType.INFORMATION, error.replaceFirst(/^\[[^\]]*\]\s*/, ""), ButtonType.OK)
-                a.headerText = toolLabel + ": nothing found"
-                a.initOwner(stage)
-                a.show()
-            } else {
-                status.text = "failed: " + error
-            }
+            finishFailed(toolLabel, outcome)
         }
         if (!keepWorker.selected) stopWorker(false)
+    }
+
+    void finishCompleted(String appName, String toolLabel, Map outcome, double seconds) {
+        def results = outcome.outputs?.results ?: []
+        def summary = results.findAll { it.type == "values" }.collect { r -> r.values.collect { k, v -> k + "=" + show(v) }.join(", ") }.join("; ")
+        status.text = "done in " + String.format("%.1f", seconds) + "s  " + summary
+        showResults(appName, toolLabel, results)
+        clearAfterRun()
+        scheduleChoices(200)          // a run may change what a source tool answers (e.g. a game was prepared)
+    }
+
+    /** A "no match" outcome is an answer (shown in a small dialog); any other failure goes to the status line. */
+    void finishFailed(String toolLabel, Map outcome) {
+        def code = outcome.code
+        def error = outcome.error as String
+        if (code in ["no_match", "no_result"]) {
+            status.text = "no result: " + error.replaceFirst(/^\[[^\]]*\]\s*/, "")
+            def a = new Alert(Alert.AlertType.INFORMATION, error.replaceFirst(/^\[[^\]]*\]\s*/, ""), ButtonType.OK)
+            a.headerText = toolLabel + ": nothing found"
+            a.initOwner(stage)
+            a.show()
+        } else {
+            status.text = "failed: " + error
+        }
     }
 
     void stopWorker(boolean force) {
@@ -1104,7 +1162,6 @@ class LcDialog {
         s.show()
     }
 
-    // ---- results
     void showResults(String appName, String toolLabel, List results) {
         def box = new VBox(10)
         box.padding = new Insets(10)
