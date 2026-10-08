@@ -86,9 +86,11 @@ For more detail, see [QuPath image regions and results](docs/USING_QUPATH.md).
 
 ## Applications
 
-[Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) provides synthetic images and outputs for checking QuPath's bridge. Other installable applications, including [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition), [NucleiSky](https://github.com/CellMigrationLab/NucleiSky), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) and [CellTracksColab](https://github.com/CellMigrationLab/CellTracksColab_LabConstrictor), are listed in the [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools).
+QuPath reads the same registered LabConstrictor tool manifests as the other hosts. A scientific application does not need a separate QuPath extension to expose its declared tools.
 
-Their availability as desktop applications does **not** establish that their workflows have been tested in QuPath. Inspect the registered tools and check inputs, outputs and coordinate handling before using them on whole-slide data.
+[Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) provides a small example for checking the host. Other applications include [NucleiSky](https://github.com/CellMigrationLab/NucleiSky), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic), [CellTracksColab](https://github.com/CellMigrationLab/CellTracksColab_LabConstrictor) and [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition). See the [Toolkit](https://github.com/CellMigrationLab/LabConstrictor-Tools) for installation links.
+
+**The issue is usefulness, not an application-specific integration requirement.** Image-region analysis and spatial outputs are natural fits for QuPath; game controls or other workflows may be less convenient there. Check how QuPath handles the tool's declared inputs and outputs, especially coordinate mapping and native object creation.
 
 ## For developers and testers
 
