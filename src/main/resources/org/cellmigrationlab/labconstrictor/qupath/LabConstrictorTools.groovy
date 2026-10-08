@@ -47,6 +47,9 @@ class LcConst {
     static final int MAX_SHAPES = 50000                  // outlines added to the image; the message says how many were left out (same limit as the Python reference, shapes.MAX_LABELS_HINT)
     static final int MAX_REGION_OBJECTS = 65535          // annotations in a RegionOf selection: labels of the region image (16 bit)
     static final long MAX_REGION_PIXELS = 100_000_000L   // pixels of the image a RegionOf selection is painted on (the label image is held in memory)
+    static final long MAX_EXPORT_PIXELS = 100_000_000L   // pixels (width x height of one plane) the host exports to a tool from an image; above this the run is refused (override: system property below)
+    static final String MAX_EXPORT_PROPERTY = "lc.qupath.max_export_pixels"   // system property that replaces MAX_EXPORT_PIXELS (the tests use it to trigger the guard on a small image)
+    static final double FULL_RESOLUTION = 1.0d           // downsample of every export and of every offset for now (the resolution choice is a later step)
     static final int RESULTS_KEPT = 20                   // results folders kept under <LC_HOME>/results (same as the command line, cli.RESULTS_KEPT)
     static final int TABLE_ROWS_SHOWN = 2000             // rows of a result table put in the results window
     static final int LOG_KEPT = 200                      // messages LcLog.recent keeps
@@ -126,6 +129,66 @@ class LcJson {
     static Object parse(File file) { parseText(file.getText("UTF-8")) }
     static String toJson(Object o) { GSON.toJson(o) }
     static String pretty(Object o) { PRETTY.toJson(o) }
+}
+
+// ---------------------------------------------------------------------------------------------------- image area
+/** The part of an image a tool receives ("Image area") and what maps its results back: an area is a Map
+ *  [kind, x0, y0, width, height, downsample, z, t] in full-resolution slide pixels; `downsample` is always 1.0 for now and is the one field the
+ *  later resolution step changes. A result at (x, y) of the exported image lies at (x0 + x * downsample, y0 + y * downsample) of the slide. */
+class LcArea {
+    static final String WHOLE = "Whole image"
+    static final String SELECTION = "Selected annotation(s)"
+    static final String VIEWPORT = "Current viewport"
+    static final List<String> CHOICES = [WHOLE, SELECTION, VIEWPORT]
+
+    /** The export budget in pixels: LcConst.MAX_EXPORT_PIXELS, or the system property when it holds a positive whole number (anything else is logged once and ignored). */
+    static long budget() {
+        def text = System.getProperty(LcConst.MAX_EXPORT_PROPERTY)
+        if (!text) return LcConst.MAX_EXPORT_PIXELS
+        try {
+            long value = Long.parseLong(text.trim())
+            if (value > 0) return value
+        } catch (NumberFormatException e) {
+            LcLog.once("budget-text:" + text, "system property " + LcConst.MAX_EXPORT_PROPERTY + " = '" + text + "' is not a whole number (" + e.message + ")")
+        }
+        LcLog.once("budget:" + text, "system property " + LcConst.MAX_EXPORT_PROPERTY + " = '" + text + "' is ignored: the default of " + LcConst.MAX_EXPORT_PIXELS + " pixels is used")
+        return LcConst.MAX_EXPORT_PIXELS
+    }
+
+    /** The whole image of `server` (plane z 0, t 0, as the export always was). */
+    static Map whole(def server) {
+        return [kind: WHOLE, x0: 0, y0: 0, width: server.width, height: server.height, downsample: LcConst.FULL_RESOLUTION, z: 0, t: 0]
+    }
+
+    /** The box [minX, minY, maxX, maxY] widened to whole pixels and clamped to the image of `server` (anything with width and height); null when nothing of it is inside. */
+    static Map clamped(String kind, List<Double> box, def server, int z, int t) {
+        int x0 = Math.max(0, (int) Math.floor(box[0])), y0 = Math.max(0, (int) Math.floor(box[1]))
+        int x1 = Math.min(server.width as int, (int) Math.ceil(box[2])), y1 = Math.min(server.height as int, (int) Math.ceil(box[3]))
+        return (x1 <= x0 || y1 <= y0) ? null : [kind: kind, x0: x0, y0: y0, width: x1 - x0, height: y1 - y0, downsample: LcConst.FULL_RESOLUTION, z: z, t: t]
+    }
+
+    static long pixels(Map area) { return (long) area.width * (long) area.height }
+
+    /** The region of the server the export reads. */
+    static RegionRequest request(def server, Map area) {
+        return RegionRequest.createInstance(server.path, area.downsample as double, area.x0 as int, area.y0 as int, area.width as int, area.height as int, area.z as int, area.t as int)
+    }
+
+    /** A result coordinate of the exported image on the slide; null area (the whole image) leaves it as it is. */
+    static double slideX(Map area, double x) { return area == null ? x : (area.x0 as double) + x * (area.downsample as double) }
+    static double slideY(Map area, double y) { return area == null ? y : (area.y0 as double) + y * (area.downsample as double) }
+
+    /** The plane results are placed on: that of the area, else the default one. */
+    static ImagePlane plane(Map area) { return area == null ? ImagePlane.getDefaultPlane() : ImagePlane.getPlane(area.z as int, area.t as int) }
+
+    /** Same part of the slide (kind aside). */
+    static boolean same(Map a, Map b) {
+        return ["x0", "y0", "width", "height", "z", "t"].every { a[it] == b[it] }
+    }
+
+    static String describe(Map area) {
+        return area.kind + " (x " + area.x0 + ", y " + area.y0 + ", " + area.width + " x " + area.height + " px)"
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------- registry and trust checks
@@ -343,6 +406,8 @@ class LcDialog {
     String lastCopied                              // the text the last Copy as command put on the clipboard (for tests)
     Map<String, CheckBox> selectionBoxes = [:]       // RegionOf: the 'use the selection' box of a region parameter
     Map<String, ComboBox<String>> imageBoxes = [:]
+    Map<String, ComboBox<String>> areaBoxes = [:]     // Image area: the area chooser of each image / labels parameter
+    volatile Map<String, Map> areasAtRun = [:]        // image parameter -> its area in the run in progress (only parameters with an area other than the whole image)
     Map<String, String> imageOf = [:]            // pixel-size parameter -> image parameter
     LcWorker worker
     String workerApp
@@ -454,7 +519,7 @@ class LcDialog {
         def app = apps[appBox.value]
         currentTool = app?.schema?.tools?.find { it.label == toolBox.value }
         formBox.children.clear()
-        getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); imageOf.clear(); selectionBoxes.clear()
+        getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); areaBoxes.clear(); imageOf.clear(); selectionBoxes.clear()
         checks.clear(); choiceBoxes.clear(); choiceSeq.clear(); channelBoxes.clear()
         description.text = currentTool?.description ?: ""
         if (currentTool == null) return
@@ -801,7 +866,8 @@ class LcDialog {
         def sourceMap = sources
         def channelBox = p.pick_channel ? channelChooser(p, box, fileField, sourceMap) : null
         def selectionBox = p.region_of ? regionSelectionBox(name, box, fileField) : null
-        Node node = new HBox(6, box, fileField, browse)
+        def areaBox = areaChooser(p, box, selectionBox)
+        Node node = new HBox(6, box, areaBox, fileField, browse)
         if (selectionBox != null) node = new VBox(2, node, selectionBox)
         if (channelBox != null) node = new VBox(2, node, new HBox(6, new Label("Channel"), channelBox))
         HBox.setHgrow(box, Priority.SOMETIMES)
@@ -813,8 +879,38 @@ class LcDialog {
                     if (v == NO_IMAGE) return null
                     def channel = channelBox != null && channelBox.visible ? channelBox.items.indexOf(channelBox.value) : -1
                     if (v == FILE_CHOICE) return fileField.text?.trim() ? [file: fileField.text.trim(), channel: channel] : null
-                    return [source: sourceMap[v], channel: channel]
+                    def value = [source: sourceMap[v], channel: channel]
+                    if (areaBox.value != LcArea.WHOLE && !areaBox.disable) value.area = areaBox.value      // Image area: only for the open image
+                    return value
                 }]
+    }
+
+    /** True for the "Current image: ..." entry of an image chooser (the image open in QuPath). */
+    static boolean isCurrentImage(String choice) { return choice != null && choice.startsWith("Current image") }
+
+    /** Image area: the part of the open image the tool receives. Only the open image has selections and a viewport, so for a project image or a file
+     *  the chooser is disabled (and says why); so it is while "use the selection" is ticked (the area of the image the region belongs to counts). */
+    ComboBox<String> areaChooser(Map p, ComboBox<String> box, CheckBox selectionBox) {
+        def areaBox = new ComboBox<String>()
+        areaBox.items.setAll(LcArea.CHOICES)
+        areaBox.value = LcArea.WHOLE
+        def tip = new Tooltip()
+        tip.wrapText = true
+        tip.maxWidth = LcConst.TOOLTIP_WIDTH
+        areaBox.tooltip = tip
+        areaBoxes[p.name] = areaBox
+        def update = {
+            boolean current = isCurrentImage(box.value as String), picked = selectionBox != null && selectionBox.selected
+            areaBox.disable = !current || picked
+            if (areaBox.disable) areaBox.value = LcArea.WHOLE
+            tip.text = current && !picked ? "Image area: send the whole image, the bounding box of the selected annotation(s), or the part shown in the viewer. Results are placed back on the full image."
+                     : current ? "Image area: the selection is the region; set the area on the image it belongs to"
+                     : "Image area: a project image or a file is always sent whole; only the image open in QuPath can be limited to its selected annotations or the viewport"
+        }
+        box.valueProperty().addListener({ o, a, b -> update() } as javafx.beans.value.ChangeListener)
+        if (selectionBox != null) selectionBox.selectedProperty().addListener({ o, a, b -> update() } as javafx.beans.value.ChangeListener)
+        update()
+        return areaBox
     }
 
     /** PickChannel: the channels (names) of the chosen image; the tool gets only the chosen one. */
@@ -986,6 +1082,10 @@ class LcDialog {
                 }
             }
             if (p.pick_channel && v.channel != null && v.channel >= 0) notes << ("# " + p.name + ": QuPath sent only channel " + (v.channel + 1) + "; the command sends the whole file")
+            if (v.area) {
+                notes << ("# " + p.name + ": QuPath sent only the Image area '" + v.area + "' (the command line has no area); the command sends the whole file")
+                LcLog.once("copy-area:" + currentTool?.id + ":" + p.name, "copy as command: the Image area '" + v.area + "' of '" + p.name + "' is not part of the command (it sends the whole file)")
+            }
         }
         return path
     }
@@ -1144,21 +1244,23 @@ class LcDialog {
         if (!selected) throw new IllegalStateException("'" + label + "': no annotation is selected: select one or more annotations, or untick the selection")
         if (selected.size() > LcConst.MAX_REGION_OBJECTS) throw new IllegalStateException("'" + label + "': " + selected.size() + " annotations are selected; at most " + LcConst.MAX_REGION_OBJECTS + " are supported")
         def server = data.server
-        int w = server.width, h = server.height
-        if ((long) w * h > LcConst.MAX_REGION_PIXELS)
-            throw new IllegalStateException("'" + label + "': the image has " + (long) w * h + " pixels; a selection region is supported up to " + LcConst.MAX_REGION_PIXELS + " (use a smaller image or a file)")
-        def mask = paintLabelMask(selected, w, h)
-        if (mask == null) throw new IllegalStateException("'" + label + "': the selected annotations cover no pixel of the image")
+        def area = areasAtRun[p.region_of] ?: LcArea.whole(server)
+        if (LcArea.pixels(area) > LcConst.MAX_REGION_PIXELS)
+            throw new IllegalStateException("'" + label + "': the " + (areasAtRun[p.region_of] ? "area" : "image") + " has " + LcArea.pixels(area) + " pixels; a selection region is supported up to " + LcConst.MAX_REGION_PIXELS + " (choose 'Image area: " + LcArea.SELECTION + "' on the image, or use a smaller image or a file)")
+        def mask = paintLabelMask(selected, area.width as int, area.height as int, area.x0 as double, area.y0 as double)
+        if (mask == null) throw new IllegalStateException("'" + label + "': the selected annotations cover no pixel of the " + (areasAtRun[p.region_of] ? "Image area" : "image"))
         def out = new File(tmp, p.name + ".tif")
         ImageWriterTools.writeImage(mask, out.absolutePath)
         return out
     }
 
-    /** The objects painted as a 16-bit label image (object i has label i + 1), or null when none covers a pixel. */
-    static BufferedImage paintLabelMask(Collection selected, int w, int h) {
+    /** The objects painted as a 16-bit label image (object i has label i + 1), or null when none covers a pixel. The image is the part of the slide
+     *  that starts at (x0, y0) and is w x h pixels (the Image area; the whole image when they are 0). */
+    static BufferedImage paintLabelMask(Collection selected, int w, int h, double x0 = 0d, double y0 = 0d) {
         def painted = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)       // each object painted in the colour of its number (no anti-aliasing: pixel centres decide)
         def g = painted.createGraphics()
         try {
+            g.translate(-x0, -y0)
             selected.eachWithIndex { obj, i -> g.setColor(new java.awt.Color(i + 1)); g.fill(obj.ROI.shape) }
         } finally { g.dispose() }
         def mask = new BufferedImage(w, h, BufferedImage.TYPE_USHORT_GRAY)
@@ -1174,6 +1276,7 @@ class LcDialog {
     /** The request inputs: every form value prepared, plus the host-owned results folder as `_job_dir`. */
     Map prepareInputs(Map values, List params, File tmp, String appName, String toolId) {
         def inputs = new LinkedHashMap()
+        areasAtRun = resolveAreas(values, params)       // before anything is exported: a refused area costs nothing
         values.each { name, v -> inputs[name] = prepareInput(params.find { it.name == name }, name as String, v, tmp, appName) }
         inputs["_job_dir"] = newJobDir(appName, toolId).absolutePath
         return inputs
@@ -1190,17 +1293,95 @@ class LcDialog {
         return v
     }
 
-    /** An image value becomes a file path: the selection mask, the file as typed, or an exported TIFF (one channel when PickChannel chose one). */
+    /** The area of every image parameter whose Image area is not the whole image (parameter name -> area). Several image inputs must agree: the
+     *  results of the tool can have only one offset, so a run that mixes areas (or an area with a whole image or a file) is refused. */
+    Map<String, Map> resolveAreas(Map values, List params) {
+        def areas = new LinkedHashMap<String, Map>()
+        def exported = params.findAll { it.type in ["image", "labels"] && values[it.name] instanceof Map && !values[it.name].selection }
+        for (p in exported) {
+            def v = values[p.name]
+            if (v.area && v.area != LcArea.WHOLE) areas[p.name as String] = resolveArea(p, v.area as String, v.source.call())
+        }
+        if (areas) {
+            def first = areas.keySet().first()
+            def odd = exported.find { !areas.containsKey(it.name) || !LcArea.same(areas[it.name], areas[first]) }
+            if (odd != null) {
+                def describe = { name -> areas.containsKey(name) ? LcArea.describe(areas[name]) : "the whole image (a project image, a file or Whole image)" }
+                throw new IllegalStateException("'" + odd.label + "' and '" + params.find { it.name == first }.label + "' use different areas: " + describe(odd.name) + " and " + describe(first) +
+                        ". The results of a tool can have only one offset: use the same Image area for all image inputs, or Whole image")
+            }
+        }
+        return areas
+    }
+
+    /** The area of the open image that an Image area choice other than the whole image names, or an IllegalStateException that says why there is none. */
+    Map resolveArea(Map p, String kind, def server) {
+        return onFx { resolveAreaOnFx(p, kind, server) } as Map
+    }
+
+    /** Runs `c` on the FX thread (selections and the viewer belong to it) and returns its result or rethrows what it threw. */
+    static Object onFx(Closure c) {
+        if (Platform.isFxApplicationThread()) return c()
+        def latch = new java.util.concurrent.CountDownLatch(1)
+        def box = [null, null]
+        Platform.runLater {
+            try { box[0] = c() } catch (Exception e) { box[1] = e } finally { latch.countDown() }       // broad on purpose: handed back to the caller below, which rethrows it
+        }
+        latch.await()
+        if (box[1] != null) throw box[1]
+        return box[0]
+    }
+
+    Map resolveAreaOnFx(Map p, String kind, def server) {
+        def label = p.label as String
+        def data = qupath?.imageData
+        if (data == null) throw new IllegalStateException("'" + label + "': no image is open in QuPath for the Image area '" + kind + "': open the image, or choose '" + LcArea.WHOLE + "'")
+        def viewer = qupath.viewer
+        int z = viewer?.imageData != null ? viewer.getZPosition() : 0, t = viewer?.imageData != null ? viewer.getTPosition() : 0       // the plane the person is looking at
+        def area = kind == LcArea.SELECTION ? selectionArea(label, data, server, z, t) : kind == LcArea.VIEWPORT ? viewportArea(label, viewer, server, z, t) : null
+        if (area == null && kind != LcArea.SELECTION && kind != LcArea.VIEWPORT) throw new IllegalStateException("'" + label + "': unknown Image area '" + kind + "'")
+        if (area == null) throw new IllegalStateException("'" + label + "': the " + kind + " lies outside the image: choose another area, or '" + LcArea.WHOLE + "'")
+        return area
+    }
+
+    /** The bounding box of the selected annotations (points do not count), clamped to the image. */
+    static Map selectionArea(String label, def data, def server, int z, int t) {
+        def rois = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }*.ROI
+        if (!rois) throw new IllegalStateException("'" + label + "': no annotation is selected for the Image area '" + LcArea.SELECTION + "': select one or more annotations, or choose '" + LcArea.WHOLE + "'")
+        def box = [rois*.boundsX.min(), rois*.boundsY.min(), rois.collect { it.boundsX + it.boundsWidth }.max(), rois.collect { it.boundsY + it.boundsHeight }.max()]
+        return LcArea.clamped(LcArea.SELECTION, box as List<Double>, server, z, t)
+    }
+
+    /** The bounds of the region the viewer shows, clamped to the image. */
+    static Map viewportArea(String label, def viewer, def server, int z, int t) {
+        if (viewer == null || viewer.imageData == null) throw new IllegalStateException("'" + label + "': no viewer shows the image for the Image area '" + LcArea.VIEWPORT + "': open the image in a viewer, or choose '" + LcArea.WHOLE + "'")
+        def b = viewer.displayedRegionShape.bounds2D
+        return LcArea.clamped(LcArea.VIEWPORT, [b.minX, b.minY, b.maxX, b.maxY], server, z, t)
+    }
+
+    /** An image value becomes a file path: the selection mask, the file as typed, or an exported TIFF (one channel when PickChannel chose one,
+     *  only the Image area when one is chosen). An export above the size budget is refused. */
     String prepareImageInput(Map p, String name, Map v, File tmp, String appName) {
         if (v.selection) return selectionMask(p, tmp, appName).absolutePath          // RegionOf: the selected annotations
         boolean oneChannel = p.pick_channel && v.channel != null && v.channel >= 0
         if (v.file && !oneChannel) return existingFile(v.file as String).absolutePath
         def server = v.file ? ImageServers.buildServer(existingFile(v.file as String).absolutePath) : v.source.call()
+        def area = areasAtRun[name] ?: LcArea.whole(server)
+        guardExportSize(p, server, area)
         if (oneChannel && server.nChannels() > 1)       // PickChannel: only the chosen channel is exported
             server = new TransformedServerBuilder(server).extractChannels(v.channel as int).build()
         def out = new File(tmp, name + ".tif")
-        ImageWriterTools.writeImageRegion(server, RegionRequest.createInstance(server), out.absolutePath)
+        ImageWriterTools.writeImageRegion(server, LcArea.request(server, area), out.absolutePath)
         return out.absolutePath
+    }
+
+    /** Refuses an export above the budget (LcArea.budget): never a silent downsample or crop. */
+    static void guardExportSize(Map p, def server, Map area) {
+        long pixels = LcArea.pixels(area), budget = LcArea.budget()
+        if (pixels <= budget) return
+        def name = server.metadata?.name ?: new File(server.path.replaceFirst(/^[^:]*:\s*/, "")).name
+        throw new IllegalStateException("'" + p.label + "': the image '" + name + "' would be sent as " + area.width + " x " + area.height + " = " + pixels + " pixels (" + (area.kind == LcArea.WHOLE ? "whole image" : area.kind) +
+                "), above the limit of " + budget + " pixels per plane (system property " + LcConst.MAX_EXPORT_PROPERTY + "). Choose 'Image area: " + LcArea.SELECTION + "' to send a part of it, or use a smaller image or a file")
     }
 
     /** The file, or FileNotFoundException with its path. */
@@ -1379,6 +1560,19 @@ class LcDialog {
         return (data == null || chosen == null || !chosen.startsWith("Current image")) ? null : data
     }
 
+    /** The area the results of output `r` were found in: that of its apply_to image (a region parameter counts as the image it belongs to), else of the
+     *  first image input; null when that input was sent whole (no offset). */
+    Map areaFor(Map r) {
+        def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
+        def param = currentTool?.inputs?.find { it.name == target }
+        return areasAtRun[(param?.region_of ?: target) as String]
+    }
+
+    /** The sentence that tells the person the results were moved by the area's offset (empty for the whole image). */
+    static String offsetNote(Map area) {
+        return area == null ? "" : " Placed with the offset of the Image area (x " + area.x0 + ", y " + area.y0 + ")."
+    }
+
     /** Points go on the image they were found in when that was the image open in QuPath; otherwise only the table is shown. */
     String placePoints(String appName, Map r) {
         def data = openImageFor(r)
@@ -1390,16 +1584,21 @@ class LcDialog {
         def lines = new File(r.path as String).readLines("UTF-8")
         def header = splitCsv(lines[0])
         def yi = header.indexOf("y"), xi = header.indexOf("x")
+        def area = areaFor(r)
         def ys = [], xs = []
-        lines.drop(1).each { line -> def cells = splitCsv(line); ys << (cells[yi] as double) + 0.5d; xs << (cells[xi] as double) + 0.5d }   // pixel centres
+        lines.drop(1).each { line ->          // pixel centres, moved by the Image area's offset
+            def cells = splitCsv(line)
+            ys << LcArea.slideY(area, (cells[yi] as double) + 0.5d)
+            xs << LcArea.slideX(area, (cells[xi] as double) + 0.5d)
+        }
         def name = appName + ":" + r.name
         def hierarchy = data.hierarchy
         def previous = hierarchy.annotationObjects.findAll { it.name == name }
         if (previous && currentTool.outputs.any { it.name == r.name && it.replace }) hierarchy.removeObjects(previous, true)   // Replace()
-        def obj = PathObjects.createAnnotationObject(ROIs.createPointsROI(xs as double[], ys as double[], ImagePlane.getDefaultPlane()))
+        def obj = PathObjects.createAnnotationObject(ROIs.createPointsROI(xs as double[], ys as double[], LcArea.plane(area)))
         obj.name = name
         hierarchy.addObject(obj)
-        return xs.size() + " point(s) added to the open image as the annotation '" + name + "'."
+        return xs.size() + " point(s) added to the open image as the annotation '" + name + "'." + offsetNote(area)
     }
 
     /** A label that wraps long text. */
@@ -1421,7 +1620,8 @@ class LcDialog {
         }
         def collection = new Gson().fromJson(new File(r.path as String).getText("UTF-8"), Map)
         def prefix = appName + ":" + r.name
-        def built = shapeAnnotations(collection, prefix)
+        def area = areaFor(r)
+        def built = shapeAnnotations(collection, prefix, area)
         def objects = built.objects, holes = built.holes, total = collection.features.size()
         def hierarchy = data.hierarchy
         def replacing = currentTool.outputs.any { it.name == r.name && it.replace }
@@ -1433,13 +1633,14 @@ class LcDialog {
         def text = objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>'."
         if (total > LcConst.MAX_SHAPES) text += " Showing the first " + LcConst.MAX_SHAPES + " of " + total + "."
         if (holes) text += " " + holes + " outline(s) have holes (kept)."
+        text += offsetNote(area)
         return text
     }
 
     /** One annotation per GeoJSON feature (at most LcConst.MAX_SHAPES), and the number of polygon parts that have holes. */
-    Map shapeAnnotations(Map collection, String prefix) {
+    Map shapeAnnotations(Map collection, String prefix, Map area = null) {
         def factory = new org.locationtech.jts.geom.GeometryFactory()
-        def ring = { List points -> factory.createLinearRing(points.collect { new org.locationtech.jts.geom.Coordinate((it[0] as double) + 0.5d, (it[1] as double) + 0.5d) } as org.locationtech.jts.geom.Coordinate[]) }   // pixel centres
+        def ring = { List points -> factory.createLinearRing(points.collect { new org.locationtech.jts.geom.Coordinate(LcArea.slideX(area, (it[0] as double) + 0.5d), LcArea.slideY(area, (it[1] as double) + 0.5d)) } as org.locationtech.jts.geom.Coordinate[]) }   // pixel centres, moved by the Image area's offset
         def objects = [], holes = 0
         for (feature in collection.features) {
             if (objects.size() >= LcConst.MAX_SHAPES) break
@@ -1450,7 +1651,7 @@ class LcDialog {
                 factory.createPolygon(ring(part[0] as List), part.drop(1).collect { ring(it as List) } as org.locationtech.jts.geom.LinearRing[])
             }
             def shape = polygons.size() == 1 ? polygons[0] : factory.createMultiPolygon(polygons as org.locationtech.jts.geom.Polygon[])
-            def obj = PathObjects.createAnnotationObject(qupath.lib.roi.GeometryTools.geometryToROI(shape, ImagePlane.getDefaultPlane()))
+            def obj = PathObjects.createAnnotationObject(qupath.lib.roi.GeometryTools.geometryToROI(shape, LcArea.plane(area)))
             def label = feature.get("properties")?.get("label")   // .get(): on a map, Groovy's feature.properties and feature["properties"] give the bean properties, not the JSON key
             if (label instanceof Number && (label as double) == Math.floor(label as double)) label = (label as double).longValue()      // Gson reads every number as a double: 1.0 -> 1
             obj.name = prefix + " " + (label != null ? label : objects.size() + 1)
