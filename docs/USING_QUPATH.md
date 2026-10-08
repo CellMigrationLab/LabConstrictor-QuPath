@@ -4,7 +4,7 @@ The QuPath extension runs registered LabConstrictor Python tools on image data s
 
 ## Scientific applications
 
-Start with [Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) to exercise the QuPath bridge. The [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools#applications) links to scientific applications, including Guess the Condition. Their QuPath behavior is not established by those listings.
+Start with [Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) to exercise the QuPath bridge. The [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools) links to scientific applications, including Guess the Condition. Their QuPath behavior is not established by those listings.
 
 ## Before you start
 
