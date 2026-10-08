@@ -942,7 +942,8 @@ class LcDialog {
         }
     }
 
-    // ---- copy as command (the text format of labconstrictor_tools.command, the reference; shell quoting only through shellQuote)
+    // ---- copy as command (the text format of labconstrictor_tools.command, the reference). Quoting only through two helpers: shellQuote (terminal words)
+    // and pythonLiteral (Python snippet); no copied text is assembled with bare quotes around a value.
     /** The placeholder path written for a required file-like parameter that has no path. */
     static final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
@@ -999,11 +1000,17 @@ class LcDialog {
         return note + (kind == "python" ? pythonSnippet(given, built.values) : terminalCommand(given, built.values))
     }
 
-    /** Python that runs the tool once through the client; values are written as Python literals. */
+    /** One Python literal: True/False, a number as it is, anything else as a single-quoted string (backslash and quote escaped). */
+    static String pythonLiteral(Object v) {
+        if (v instanceof Boolean) return v ? "True" : "False"
+        if (v instanceof Number) return v.toString()
+        return "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'"
+    }
+
+    /** Python that runs the tool once through the client; every name and value is written through pythonLiteral. */
     String pythonSnippet(List given, Map values) {
-        def literal = { v -> v instanceof Boolean ? (v ? "True" : "False") : v instanceof Number ? v.toString() : "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'" }
-        def body = given ? "{\n" + given.collect { "    '" + it.name + "': " + literal(values[it.name]) + "," }.join("\n") + "\n}" : "{}"
-        return "from labconstrictor_tools import client\n\ntask = client.run_once('" + appBox.value + "', '" + currentTool.id + "', " + body + ")\n" +
+        def body = given ? "{\n" + given.collect { "    " + pythonLiteral(it.name) + ": " + pythonLiteral(values[it.name]) + "," }.join("\n") + "\n}" : "{}"
+        return "from labconstrictor_tools import client\n\ntask = client.run_once(" + pythonLiteral(appBox.value) + ", " + pythonLiteral(currentTool.id) + ", " + body + ")\n" +
                'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
     }
 
