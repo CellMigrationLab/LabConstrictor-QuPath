@@ -38,6 +38,36 @@ import java.util.concurrent.BlockingQueue
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
+// ---------------------------------------------------------------------------------------------------- logging
+/** Every handler that does not rethrow says so here (QuPath's log, with the stack trace); `once` is for fallbacks that are the intended
+ *  behaviour, so a form that refreshes often does not flood the log. `recent` keeps the last messages (the tests read it). */
+class LcLog {
+    static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger("labconstrictor")
+    static final List<String> recent = Collections.synchronizedList(new ArrayList<String>())
+    private static final Set<String> seen = Collections.synchronizedSet(new HashSet<String>())
+
+    private static void keep(String text) { recent << text; while (recent.size() > 200) recent.remove(0) }
+
+    static void warn(String text, Throwable t = null) {
+        keep(t != null ? text + " [" + t.class.simpleName + ": " + t.message + "]" : text)
+        if (t != null) LOG.warn("LabConstrictor: " + text, t) else LOG.warn("LabConstrictor: " + text)
+    }
+
+    /** An intended fallback: logged the first time it happens for `key`. */
+    static boolean once(String key, String text) {
+        boolean first = seen.add(key)
+        if (first) { keep(text); LOG.info("LabConstrictor: " + text) }
+        return first
+    }
+
+    static String trace(Throwable t) { def w = new StringWriter(); t.printStackTrace(new PrintWriter(w)); return w.toString() }
+
+    /** Best-effort removal of a temporary folder: a folder that stays behind is reported, not ignored. */
+    static void deleteTemp(File dir) {
+        if (dir != null && dir.exists() && !dir.deleteDir()) warn("could not delete the temporary folder " + dir)
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------- JSON (QuPath ships Gson, not groovy-json)
 class LcJson {
     static final Gson GSON = new GsonBuilder().serializeNulls().disableHtmlEscaping().create()
@@ -88,7 +118,8 @@ class LcRegistry {
                     def schema = LcJson.parse(new File(entry.schema_path as String))
                     if ((schema.protocol as double) != 1d) throw new IllegalStateException("unsupported protocol " + schema.protocol)
                     apps[name] = [entry: entry, schema: schema]
-                } catch (Exception e) {
+                } catch (Exception e) {     // broad on purpose: any broken registry entry (I/O, JSON, checks above) is one listed problem, never a failed start
+                    LcLog.warn("registry entry '" + name + "' skipped", e)
                     problems << (name + ": " + e.message)
                 }
             }
@@ -117,20 +148,32 @@ class LcWorker {
                 proc.inputStream.withReader("UTF-8") { reader ->
                     String line
                     while ((line = reader.readLine()) != null) {
+                        def msg = null
                         try {
-                            def msg = LcJson.parseText(line)
+                            msg = LcJson.parseText(line)
+                        } catch (com.google.gson.JsonParseException e) {     // not JSON: a stray print of the tool or a library
+                            msg = null
+                            LcLog.warn("worker output that is not a protocol message: " + line.take(200), e)
+                        }
+                        if (msg instanceof Map) {
                             def queue = tasks.get(msg.task)
                             if (queue != null) queue.put(msg)
-                        } catch (Exception ignored) { /* a line that is not a protocol message is ignored */ }
+                        } else {
+                            stderrTail.append("[not a protocol message] ").append(line.take(500)).append("\n")    // shown in Details and in a crash text
+                        }
                     }
                 }
-            } catch (Exception ignored) { }
+            } catch (IOException e) {      // the pipe closes when the worker ends or is killed; the CRASH below tells the person if a run was waiting
+                if (!closed) LcLog.warn("lost the worker's output stream", e)
+            }
             tasks.values().each { it.put([responseType: "CRASH", error: crashText()]) }
         }
         Thread.start("lc-stderr") {
             try {
                 proc.errorStream.withReader("UTF-8") { r -> char[] buf = new char[2048]; int n; while ((n = r.read(buf)) > 0) { stderrTail.append(buf, 0, n); if (stderrTail.length() > 20000) stderrTail.delete(0, stderrTail.length() - 10000) } }
-            } catch (Exception ignored) { }
+            } catch (IOException e) {      // same as above, for the error stream
+                if (!closed) LcLog.warn("lost the worker's error stream", e)
+            }
         }
     }
 
@@ -139,7 +182,7 @@ class LcWorker {
     /** What to tell the person when the worker ends without answering: the likely cause from the exit code (same wording as the Python and Fiji hosts), then the worker's own last words. */
     String crashText() {
         Integer code = null
-        try { if (proc.waitFor(2, TimeUnit.SECONDS)) code = proc.exitValue() } catch (Exception ignored) { }
+        try { if (proc.waitFor(2, TimeUnit.SECONDS)) code = proc.exitValue() } catch (InterruptedException e) { Thread.currentThread().interrupt(); LcLog.warn("interrupted while waiting for the worker's exit code", e) }
         def hint = code in [-9, 137] ? "The worker was killed (out of memory? the OS ends big image jobs this way)."
                  : code in [-11, 139, -1073741819] ? "The worker crashed natively (segmentation fault in a compiled library)."
                  : code == 3 ? "The app's tool module failed to import (see the output below)."
@@ -183,7 +226,7 @@ class LcWorker {
     void cancel(int graceSeconds = 3) {
         def id = currentTask
         if (id == null) return
-        try { send([task: id, requestType: "CANCEL"]) } catch (Exception ignored) { }
+        try { send([task: id, requestType: "CANCEL"]) } catch (IOException e) { LcLog.warn("could not send the cancel request (the worker is killed after " + graceSeconds + " s)", e) }
         Thread.start("lc-cancel") {
             Thread.sleep(graceSeconds * 1000L)
             if (currentTask == id) kill()
@@ -192,13 +235,13 @@ class LcWorker {
 
     void kill() {
         closed = true
-        try { proc.descendants().each { it.destroyForcibly() } } catch (Exception ignored) { }
+        try { proc.descendants().each { it.destroyForcibly() } } catch (SecurityException | UnsupportedOperationException e) { LcLog.warn("could not stop the worker's child processes", e) }
         proc.destroyForcibly()
     }
 
     void close() {
         closed = true
-        try { proc.outputStream.close() } catch (Exception ignored) { }
+        try { proc.outputStream.close() } catch (IOException e) { LcLog.warn("could not close the worker's input (it is killed if it does not stop)", e) }
         if (!proc.waitFor(10, TimeUnit.SECONDS)) kill()
     }
 }
@@ -365,15 +408,16 @@ class LcDialog {
             boolean ready = true
             for (dep in p.choices_from.depends) {
                 def v = null
-                try { v = getters[dep]() } catch (Exception ignored) { }
+                try { v = getters[dep]() } catch (Exception e) { LcLog.warn("choices of '" + p.name + "': could not read '" + dep + "' (text field kept)", e) }   // a getter that fails leaves the question not ready
                 def depParam = currentTool.inputs.find { it.name == dep }
                 if (v == null || v.toString().isEmpty() || (depParam.type == "folder" && !new File(v.toString()).isDirectory())) { ready = false; break }
                 request[dep] = v
             }
             def number = (choiceSeq[p.name] = (choiceSeq[p.name] ?: 0) + 1)
-            if (!ready) { applyChoices(p.name, number, null); return }
+            if (!ready) { applyChoices(p.name, number, null, "waiting for a value of " + p.choices_from.depends.join(", ")); return }
             Thread.start("lc-choices") {
                 List options = null
+                String why = null
                 def tmp = Files.createTempDirectory("lcqchoices_").toFile()
                 try {
                     request["_job_dir"] = tmp.absolutePath
@@ -386,20 +430,33 @@ class LcDialog {
                     if (outcome.responseType == "COMPLETION") {
                         def found = (outcome.outputs?.results ?: []).find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
                         options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
+                        if (options == null) why = "the source tool '" + p.choices_from.tool + "' did not return a list"
+                    } else {
+                        why = "the source tool '" + p.choices_from.tool + "' did not complete (" + outcome.responseType + ": " + outcome.error + ")"
                     }
-                } catch (Exception ignored) {
-                    // never blocks the form: the text field remains
-                } finally { tmp.deleteDir() }
-                Platform.runLater { applyChoices(p.name, number, options) }
+                } catch (Exception e) {
+                    // broad on purpose (isolation boundary): whatever the source tool or its worker does, the form is never blocked; the text field remains
+                    LcLog.warn("choices of '" + p.name + "' could not be loaded", e)
+                    why = e.class.simpleName + ": " + e.message
+                } finally { LcLog.deleteTemp(tmp) }
+                def failure = why
+                Platform.runLater { applyChoices(p.name, number, options, failure) }
             }
         }
     }
 
-    void applyChoices(String name, int number, List options) {
+    /** `why` says why there are no options (the text field is used instead); the reason is logged once and, for a failure, shown in the status line. */
+    void applyChoices(String name, int number, List options, String why = null) {
         if (choiceSeq[name] != number) return                         // a late answer for another question or form
         def combo = choiceBoxes[name], field = controls[name]
         if (combo == null) return
-        if (!options) { combo.visible = false; combo.managed = false; field.visible = true; field.managed = true; return }
+        if (!options) {
+            combo.visible = false; combo.managed = false; field.visible = true; field.managed = true
+            boolean first = LcLog.once("choices:" + currentTool?.id + ":" + name + ":" + (why == null ? "empty" : why.startsWith("waiting") ? "waiting" : "failed"), "'" + name + "' stays a text field" + (why ? ": " + why : " (the source tool listed nothing)"))
+            // shown the first time only: the refresh after every run must not replace the result of that run in the status line
+            if (first && why && !why.startsWith("waiting") && !running) status.text = "The choices for '" + name + "' could not be loaded (type the value): " + why.take(200)
+            return
+        }
         def current = (field as TextField).text ?: ""
         def param = currentTool.inputs.find { it.name == name } ?: [:]
         // a blank entry means "no answer" (unset for an optional parameter, or when the field is empty); a value the field already
@@ -543,7 +600,7 @@ class LcDialog {
                 def initial = p.default != null ? (p.default as double).longValue() : Math.max(lo, Math.min(hi, 0L))
                 def spinner = new Spinner<Integer>(lo as int, hi as int, initial as int)
                 spinner.editable = true
-                commitOnFocusLost(spinner)
+                commitOnFocusLost(spinner, p.label as String)
                 get = { spinner.value }; set = { spinner.valueFactory.value = (it as double).intValue() }
                 node = spinner; controls[name] = spinner
                 if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {   // Widget("slider"): a slider beside the typed box, kept in step
@@ -572,7 +629,7 @@ class LcDialog {
                 def step = (hi - lo) <= 100 && p.maximum != null ? (hi - lo) / 100 : 1d
                 def spinner = new Spinner<Double>(lo, hi, initial, step)
                 spinner.editable = true
-                commitOnFocusLost(spinner)
+                commitOnFocusLost(spinner, p.label as String)
                 get = { spinner.value }; set = { spinner.valueFactory.value = it as double }
                 node = spinner; controls[name] = spinner
                 if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {   // Widget("slider"): a slider beside the typed box, kept in step
@@ -625,7 +682,11 @@ class LcDialog {
                         try {
                             def server = box.value == FILE_CHOICE ? (fileField.text?.trim() ? ImageServers.buildServer(fileField.text.trim()) : null) : sourceMap[box.value]?.call()
                             if (server != null) names = server.metadata.channels.collect { it.name as String }
-                        } catch (Exception ignored) { /* an unreadable file is reported when the run starts */ }
+                        } catch (Exception e) {      // broad on purpose (a file chooser entry can fail in any reader): the channel list must never break the form
+                            LcLog.warn("channels of '" + name + "' could not be read", e)
+                            status?.text = "Channels of '" + p.label + "' could not be read: " + e.message
+                        }
+                        if (names.size() <= 1) LcLog.once("channels:" + currentTool?.id + ":" + name, "no channel chooser for '" + name + "' (the image has " + names.size() + " channel(s))")
                         channelBox.items.setAll(names.size() > 1 ? names : [])
                         channelBox.value = names.size() > 1 ? names.first() : null
                         channelBox.visible = channelBox.managed = names.size() > 1
@@ -705,12 +766,19 @@ class LcDialog {
         return node
     }
 
-    static void commitOnFocusLost(Spinner spinner) {
-        spinner.focusedProperty().addListener({ o, a, focused ->
-            if (!focused) {
-                try { spinner.increment(0) } catch (Exception ignored) { /* keep the old value */ }
-            }
-        } as javafx.beans.value.ChangeListener)
+    void commitOnFocusLost(Spinner spinner, String label = null) {
+        spinner.focusedProperty().addListener({ o, a, focused -> if (!focused) commitSpinner(spinner, label) } as javafx.beans.value.ChangeListener)
+    }
+
+    /** Takes what was typed into the box; text that is not a number keeps the old value, and the person is told. */
+    void commitSpinner(Spinner spinner, String label = null) {
+        try {
+            spinner.increment(0)
+        } catch (RuntimeException e) {      // JavaFX reports unparseable text as NumberFormatException or as a RuntimeException around a ParseException
+            if (!(e instanceof NumberFormatException) && !(e.cause instanceof java.text.ParseException)) throw e
+            LcLog.warn("'" + (label ?: "number") + "': '" + spinner.editor?.text + "' is not a number (kept " + spinner.value + ")", e)
+            status?.text = "Check '" + (label ?: "number") + "': '" + spinner.editor?.text + "' is not a number; " + spinner.value + " is used."
+        }
     }
 
     void hookEnabled(Map p) {
@@ -742,7 +810,10 @@ class LcDialog {
         try {
             def cal = source().pixelCalibration
             if (cal.hasPixelSizeMicrons()) setters[p.name](cal.pixelWidthMicrons)
-        } catch (Exception ignored) { /* leave what is there */ }
+        } catch (Exception e) {     // broad on purpose: a listener on the image dropdown must never break the form; the field keeps its value
+            LcLog.warn("pixel size of '" + box.value + "' could not be read", e)
+            status?.text = "Pixel size of '" + box.value + "' could not be read; '" + p.label + "' keeps its value: " + e.message
+        }
     }
 
     // ---- Copy as command (same text as labconstrictor_tools.command)
@@ -758,7 +829,10 @@ class LcDialog {
         def values = [:], missing = [], notes = []
         for (p in currentTool.inputs) {
             def v = null
-            try { v = getters[p.name]() } catch (Exception ignored) { }
+            try { v = getters[p.name]() } catch (Exception e) {
+                LcLog.warn("command line: could not read '" + p.name + "' (left out)", e)
+                notes << ("# " + p.name + ": the value could not be read (" + e.message + "); it is left out")
+            }
             if (p.type in ["image", "labels"]) {
                 def path = null
                 if (v instanceof Map && v.selection) {
@@ -770,7 +844,10 @@ class LcDialog {
                         try {
                             def uri = v.source.call().getURIs()?.find { it.scheme == "file" }
                             if (uri != null) path = new File(uri).path
-                        } catch (Exception ignored) { }
+                        } catch (Exception e) {      // broad on purpose: the image getter is QuPath's; the command still gets a placeholder
+                            LcLog.warn("command line: no file for the image of '" + p.name + "'", e)
+                            notes << ("# " + p.name + ": the image file could not be determined (" + e.message + ")")
+                        }
                     }
                     if (p.pick_channel && v.channel != null && v.channel >= 0) notes << ("# " + p.name + ": QuPath sent only channel " + (v.channel + 1) + "; the command sends the whole file")
                 }
@@ -822,7 +899,7 @@ class LcDialog {
         def values = new LinkedHashMap()
         for (p in currentTool.inputs) {
             def v
-            try { v = getters[p.name]() } catch (Exception e) { status.text = "Check '" + p.label + "': " + e.message; return }
+            try { v = getters[p.name]() } catch (Exception e) { LcLog.warn("could not read '" + p.name + "'", e); status.text = "Check '" + p.label + "': " + e.message; return }
             if (v == null) {
                 if (p.required && !p.nullable && p.type in ["image", "labels", "table", "file", "folder", "string"]) { status.text = "'" + p.label + "' is required."; return }
                 continue
@@ -857,9 +934,11 @@ class LcDialog {
                     }
                 }
             } catch (Exception e) {
-                outcome = [responseType: "FAILURE", error: e.class.simpleName + ": " + e.message, code: "host_error"]
+                // broad on purpose (isolation boundary of the run thread): any failure becomes the outcome the person reads (status line and Details, with the stack trace)
+                LcLog.warn("run of '" + toolId + "' failed on the host", e)
+                outcome = [responseType: "FAILURE", error: e.class.simpleName + ": " + e.message, code: "host_error", trace: LcLog.trace(e)]
             } finally {
-                tmp.deleteDir()
+                LcLog.deleteTemp(tmp)
             }
             def seconds = (System.nanoTime() - t0) / 1e9
             Platform.runLater { finish(appName, toolLabel, outcome, seconds) }
@@ -1028,9 +1107,9 @@ class LcDialog {
                 case ["image", "labels"]:
                     def open = new Button("Open in QuPath")
                     def path = r.path as String
-                    try { box.children.add(previewNode(path, r.type == "labels")) } catch (Exception e) { box.children.add(new Label("(no preview: " + e.message + ")")) }
+                    try { box.children.add(previewNode(path, r.type == "labels")) } catch (Exception e) { LcLog.warn("no preview for " + path, e); box.children.add(new Label("(no preview: " + e.message + ")")) }
                     open.onAction = {
-                        try { qupath.openImage(qupath.viewer, path, false, false) } catch (Exception e) { status.text = "cannot open: " + e.message }
+                        try { qupath.openImage(qupath.viewer, path, false, false) } catch (Exception e) { LcLog.warn("cannot open " + path, e); status.text = "cannot open: " + e.message }
                     }
                     def l = new Label(path); l.wrapText = true
                     box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ", axes " + (r.axes ?: "?") + ")"), l, open)
@@ -1068,7 +1147,10 @@ class LcDialog {
         def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
         def chosen = target ? imageChoiceAtRun[target] : null
         if (data == null || chosen == null || !chosen.startsWith("Current image"))
+        {
+            LcLog.once("points-not-placed:" + appName + ":" + r.name, "points '" + r.name + "' not placed: they were not found in the image open in QuPath (table only)")
             return "Not placed on an image (the points were not found in the image open in QuPath)."
+        }
         def lines = new File(r.path as String).readLines("UTF-8")
         def header = splitCsv(lines[0])
         def yi = header.indexOf("y"), xi = header.indexOf("x")
@@ -1100,7 +1182,10 @@ class LcDialog {
         def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
         def chosen = target ? imageChoiceAtRun[target] : null
         if (data == null || chosen == null || !chosen.startsWith("Current image"))
+        {
+            LcLog.once("shapes-not-placed:" + appName + ":" + r.name, "outlines '" + r.name + "' not placed: they were not found in the image open in QuPath")
             return "Not placed on an image (the outlines were not found in the image open in QuPath)."
+        }
         def collection = new Gson().fromJson(new File(r.path as String).getText("UTF-8"), Map)
         def factory = new org.locationtech.jts.geom.GeometryFactory()
         def ring = { List points -> factory.createLinearRing(points.collect { new org.locationtech.jts.geom.Coordinate((it[0] as double) + 0.5d, (it[1] as double) + 0.5d) } as org.locationtech.jts.geom.Coordinate[]) }   // pixel centres

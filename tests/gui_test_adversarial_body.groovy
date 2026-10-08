@@ -56,6 +56,8 @@ Thread.start("lc-gui-test") {
         expect("5000_options_fill_a_dropdown", fx { many.visible && many.items.size() >= 5000 && many.items.any { it.contains("\u4e2d") } }, fx { many.items.size() })
         expect("broken_source_keeps_text_field", fx { dlg.controls["a"].visible && !dlg.choiceBoxes["a"].visible })
         expect("non_list_source_keeps_text_field", fx { dlg.controls["b"].visible && !dlg.choiceBoxes["b"].visible })
+        expect("broken_source_is_logged_and_shown", LcLog.recent.any { it.contains("'a' stays a text field: ") } && LcLog.recent.any { it.contains("'b' stays a text field: ") }, LcLog.recent)
+        expect("broken_source_is_shown_in_status", status(dlg).contains("could not be loaded (type the value)"), status(dlg))
         fx { dlg.choiceBoxes["c"].value = "opt 00042 \u00e9\u4e2d"; dlg.controls["a"].text = "free"; dlg.checks["a"].selected = true }
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 120)
         println "STATUS_PICK " + status(dlg)

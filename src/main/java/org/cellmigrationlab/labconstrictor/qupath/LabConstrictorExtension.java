@@ -30,7 +30,11 @@ public class LabConstrictorExtension implements QuPathExtension {
             new Thread(() -> {
                 try {
                     Thread.sleep(4000);
-                } catch (InterruptedException ignored) {
+                } catch (InterruptedException e) {
+                    // the test hook is only a delay before opening the dialog: restore the flag and do not run the script
+                    Thread.currentThread().interrupt();
+                    System.err.println("LabConstrictor: test hook interrupted, the test script is not run");
+                    return;
                 }
                 Platform.runLater(() -> run(qupath, test));
             }, "lc-test-hook").start();
