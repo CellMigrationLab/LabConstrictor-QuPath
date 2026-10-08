@@ -86,7 +86,7 @@ For more detail, see [QuPath image regions and results](docs/USING_QUPATH.md).
 
 ## Applications
 
-[Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) provides synthetic images and outputs for checking QuPath's bridge. Other installable applications, including [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition), [NucleiSky](https://github.com/CellMigrationLab/NucleiSky), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) and [CellTracksColab](https://github.com/CellMigrationLab/CellTracksColab_LabConstrictor), are listed in the [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools#applications).
+[Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) provides synthetic images and outputs for checking QuPath's bridge. Other installable applications, including [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition), [NucleiSky](https://github.com/CellMigrationLab/NucleiSky), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) and [CellTracksColab](https://github.com/CellMigrationLab/CellTracksColab_LabConstrictor), are listed in the [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools).
 
 Their availability as desktop applications does **not** establish that their workflows have been tested in QuPath. Inspect the registered tools and check inputs, outputs and coordinate handling before using them on whole-slide data.
 
