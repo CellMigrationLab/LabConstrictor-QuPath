@@ -20,6 +20,7 @@ Without the jar: open `src/main/resources/org/cellmigrationlab/labconstrictor/qu
 * **Channel selector**: an image input declared with `PickChannel()` gets a Channel chooser (the channel names of the chosen image, or of a file); the tool receives only that channel.
 * **Points** found in the image that is open in QuPath become a point annotation named `<app>:<output>` (replaced by the next run when the output declares `Replace()`); points of any other image are shown as a table.
 * "No match" is a message, not an error. Progress bar, Cancel (a tool that ignores it is killed after 3 s), worker kept between runs (or not), details of the last run, no worker left behind when the window closes.
+* **Trust checks** on every registry entry (same rules as the Python registry and the Fiji script): the entry names its five text fields; the app name is a plain name; the interpreter lies inside the install prefix (which is not a filesystem root); the entry and its schema file are owned by you (in a shared folder also by root) and not writable by group or others; the schema sits next to the entry; the interpreter, its folder and the prefix are not writable by everybody (a sticky folder like `/tmp` excepted); tool ids and parameter names are plain names, parameter names Python identifiers (a parameter name becomes a file name). An entry that fails is listed under "skipped" with its reason and never started. On Windows the owner and permission checks do not apply.
 * Results are kept in `~/.labconstrictor/results/` (the newest 20), like the command line.
 
 ## Large images: the Image area and the size guard
@@ -66,6 +67,8 @@ Each of these is deliberate and is written once to QuPath's log (logger `labcons
 
 ``BODY=gui_test_fallbacks_body.groovy tests/run_gui_test.sh` checks that failures that used to be silent are reported (bad number typed into a field, unreadable value in Copy as command, host failure with stack trace in Details, unreadable channel file, intended fallbacks logged; 12 checks; needs the `interactions` example app in `LC_HOME`).
 `BODY=gui_test_area_body.groovy tests/run_gui_test.sh` checks the Image area and the size guard against the `interactions` example app and the blobs fixture (guard at and one pixel over the budget, the exported area equals the server region, outlines and points land at the blobs' full-image coordinates, the viewport area, RegionOf over an area, differing areas refused, Copy as command note; 48 checks).
+
+`BODY=gui_test_parity_trust_body.groovy LC_HOME=<an empty scratch folder named lhome_trust> tests/run_gui_test.sh` writes registry entries that break each trust check and checks that each one is refused with its reason and that a good entry loads (26 checks; needs root to test the owner check).
 
 `BODY=gui_test_buttons_body.groovy tests/run_gui_test.sh` clicks "Rescan apps" and "Restart worker" (3 checks; on the version before the split the Rescan button threw `MissingMethodException` because a local variable named `rescan` shadowed the method).
 

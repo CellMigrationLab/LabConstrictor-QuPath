@@ -57,6 +57,9 @@ class LcConst {
     static final int STDERR_KEEP = 10000                 // ... to this many characters at the end once it is longer than the line above
     static final long INT_LIMIT = 1_000_000_000L         // an integer parameter without declared limits accepts +-this
     static final double FLOAT_LIMIT = 1e12d              // a float parameter without declared limits accepts +-this
+    static final int MODE_OTHERS_WRITE = 02              // unix mode bit: writable by others (registry trust check)
+    static final int MODE_STICKY = 01000                 // unix mode bit, in a directory: only the owner of a file may replace it
+    static final List<Double> SUPPORTED_PROTOCOLS = [1d] // schema protocol versions this script understands
     // timeouts and delays
     static final int EXIT_WAIT_SECONDS = 2               // how long a crash text waits for the worker's exit code
     static final int POLL_SECONDS = 1                    // a run checks whether the worker is still alive this often
@@ -210,33 +213,150 @@ class LcRegistry {
         return dirs
     }
 
+    /** Identifiers that become file names (app, tool and parameter names): the same plain-name rule as the Python registry (and the Fiji script). */
+    static boolean plainName(def text) {
+        return text instanceof String && text && text != "." && text != ".." && !text.any { it in ["/", "\\", "\0"] } && text == text.trim()
+    }
+
+    /** A Python identifier: parameter names must pass this before they become file names or form rows. */
+    static boolean identifier(def text) { return text instanceof String && (text ==~ /[A-Za-z_][A-Za-z0-9_]*/) }
+
+    /** A tool id from the schema (it becomes part of the `lc:<id>` task name and of result folder names). */
+    static boolean toolId(def text) { return text instanceof String && (text ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/) }
+
+    /** False on Windows, where the owner / mode checks of the trust rules cannot be made. */
+    static boolean isPosixHost() { return !System.getProperty("os.name").toLowerCase().contains("win") }
+
+    /** Unix permission bits of `path`, or null where the file system has no such notion (logged: the permission checks then do not apply to it). */
+    static Integer unixMode(java.nio.file.Path path) {
+        try { return Files.getAttribute(path, "unix:mode") as Integer }
+        catch (UnsupportedOperationException | IllegalArgumentException problem) {
+            LcLog.warn("no unix permission bits for " + path + ": the permission checks do not apply to it", problem)
+            return null
+        }
+    }
+
+    /** Writable by everybody (a directory with the sticky bit, like /tmp, only lets owners replace their own files). */
+    static boolean worldWritable(File file, boolean directory) {
+        def path = file.toPath()
+        def mode = unixMode(path)
+        if (mode == null) return Files.getPosixFilePermissions(path).contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE)
+        return (mode & LcConst.MODE_OTHERS_WRITE) != 0 && !(directory && (mode & LcConst.MODE_STICKY) != 0)
+    }
+
+    /** Ownership and permission policy for a file read to decide what to start (same as the Python registry's _file_reason). */
+    static String fileReason(File file, boolean userDir, String what) {
+        def path = file.toPath()
+        def owner = Files.getOwner(path).name
+        // per-user entries must be ours; entries in shared folders (LC_APPS_PATH, /etc) may also belong to root (the administrator)
+        if (owner != System.getProperty("user.name") && !(owner == "root" && !userDir))
+            return what + " is not owned by the current user" + (userDir ? "" : " or root")
+        def permissions = Files.getPosixFilePermissions(path)
+        if (permissions.contains(java.nio.file.attribute.PosixFilePermission.GROUP_WRITE) || permissions.contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE))
+            return what + " is writable by other users"
+        return null
+    }
+
+    /** The files and folders whose replacement would run code as this user at the next start: [file, is a folder, name]. */
+    private static List executableParts(java.nio.file.Path python, java.nio.file.Path prefix) {
+        return [[python.toFile(), false, "interpreter"], [python.parent.toFile(), true, "interpreter folder"], [prefix.toFile(), true, "install prefix"]]
+    }
+
+    /** Owner and permissions of the entry file, the schema file next to it, and the interpreter with its folders; null when all pass. */
+    private static String permissionReason(File entryFile, Map entry, boolean userDir, java.nio.file.Path python, java.nio.file.Path prefix) {
+        def reason = fileReason(entryFile, userDir, "entry file")
+        if (reason) return reason
+        def schemaFile = new File(entry.schema_path as String).absoluteFile
+        if (schemaFile.parentFile.toPath().normalize() != entryFile.absoluteFile.parentFile.toPath().normalize())
+            return "schema file " + entry.schema_path + " is not in the same folder as the entry"
+        if (schemaFile.exists()) {                                       // a missing schema is reported later, with its own message
+            reason = fileReason(schemaFile, userDir, "schema file")
+            if (reason) return reason
+        }
+        for (item in executableParts(python, prefix)) {
+            if (item[0].exists() && worldWritable(item[0] as File, item[1] as boolean)) return item[2] + " " + item[0] + " is writable by everybody"
+        }
+        return null
+    }
+
+    /** Why an entry must not be used to start a process, or null. Fails closed: a check that cannot be made is a reason (same rules as the Fiji script). */
+    static String untrustedReason(File entryFile, Map entry, boolean userDir) {
+        try {
+            // lexical containment (symlinks inside the prefix are normal: a venv's python links to the base interpreter)
+            def python = new File(entry.python as String).absoluteFile.toPath().normalize(), prefix = new File(entry.prefix as String).absoluteFile.toPath().normalize()
+            if (!python.startsWith(prefix)) return "interpreter " + entry.python + " is not inside the install prefix " + entry.prefix
+            if (prefix.parent == null) return "the install prefix " + prefix + " is a filesystem root"
+            if (!isPosixHost()) return null                              // Windows: no POSIX ownership/mode to check (known, not an error)
+            try { Files.getPosixFilePermissions(entryFile.toPath()) }
+            catch (UnsupportedOperationException problem) {              // a file system without POSIX permissions (known): the entry cannot be checked
+                LcLog.warn("the registry entry " + entryFile + " is not checked for permissions: its file system has no POSIX permissions", problem)
+                return null
+            }
+            return permissionReason(entryFile, entry, userDir, python, prefix)
+        } catch (Exception problem) {      // broad on purpose: a check that cannot be made refuses the entry (fails closed)
+            LcLog.warn("cannot verify the registry entry " + entryFile, problem)
+            return "cannot verify the registry entry permissions (" + problem + ")"
+        }
+    }
+
+    /** The registry entry is untrusted JSON: check its shape before any field is used (same rules as the Python registry's _validated_entry). */
+    static String entryProblem(def entry) {
+        if (!(entry instanceof Map)) return "the entry is not a JSON object"
+        for (key in ["name", "python", "prefix", "module", "schema_path"])
+            if (!(entry[key] instanceof String) || !entry[key]) return "field '" + key + "' must be a non-empty string"
+        if (!plainName(entry.name)) return "invalid app name '" + entry.name + "': it must be a plain name without path separators"
+        if (entry.pythonpath != null && !(entry.pythonpath instanceof List && entry.pythonpath.every { it instanceof String }))
+            return "field 'pythonpath' must be a list of strings"
+        return (entry.runtime_path != null && !(entry.runtime_path instanceof String)) ? "field 'runtime_path' must be a string" : null
+    }
+
+    /** The cached schema is untrusted JSON too: shape, plus the names that later become file names. */
+    static String schemaProblem(def schema) {
+        if (!(schema instanceof Map)) return "schema is not a JSON object"
+        if (!(schema.protocol instanceof Number) || !(schema.protocol as double in LcConst.SUPPORTED_PROTOCOLS)) return "unsupported protocol " + schema.protocol
+        if (!(schema.tools instanceof List)) return "schema has no list of tools"
+        for (tool in schema.tools) {
+            if (!(tool instanceof Map) || !(tool.label instanceof String) || !toolId(tool.id) || !(tool.inputs instanceof List) || !(tool.outputs instanceof List))
+                return "a tool has an unexpected structure (needs a plain id, a text label, inputs and outputs lists)"
+            for (p in tool.inputs) {
+                if (!(p instanceof Map) || !identifier(p.name) || !(p.label instanceof String))
+                    return "tool '" + tool.id + "' has a parameter without an identifier name and a text label"
+            }
+        }
+        return null
+    }
+
+    /** One registry file: [app: [entry, schema]] when it passes every check, else [problem: "name: reason"]; a file that cannot be read is a problem too. */
+    private static Map loadFile(File file, boolean userDir) {
+        def entry = LcJson.parse(file)
+        def malformed = entryProblem(entry)
+        if (malformed) return [problem: file.name + ": " + malformed]
+        if (!new File(entry.python as String).exists())
+            return [problem: entry.name + ": not available on this machine (interpreter " + entry.python + " is missing)", name: entry.name]
+        def reason = untrustedReason(file, entry as Map, userDir)
+        if (reason) return [problem: entry.name + ": ignored: " + reason, name: entry.name]
+        def schema = LcJson.parse(new File(entry.schema_path as String))
+        def badSchema = schemaProblem(schema)
+        return badSchema ? [problem: file.name + ": " + badSchema] : [app: [entry: entry, schema: schema], name: entry.name]
+    }
+
     /** @return [apps: LinkedHashMap name -> [entry: Map, schema: Map], problems: List of "name: reason"] */
     static Map load() {
-        def apps = new LinkedHashMap(), problems = []
-        for (dir in searchPath()) {
-            if (!dir.isDirectory()) continue
+        def apps = new LinkedHashMap(), problems = [], skip = [] as Set
+        searchPath().eachWithIndex { File dir, int index ->
+            if (!dir.isDirectory()) return
             def files = (dir.listFiles({ File f -> f.name.endsWith(".json") && !f.name.endsWith(".schema.json") } as FileFilter) ?: []).sort { it.name }
             for (file in files) {
                 def name = file.name.replaceAll(/\.json$/, "")
-                if (apps.containsKey(name)) continue // the first folder in the search order wins
+                if (apps.containsKey(name) || skip.contains(name)) continue // the first folder in the search order wins
                 try {
-                    def entry = LcJson.parse(file)
-                    if (!new File(entry.python as String).isFile()) throw new IllegalStateException("interpreter not found: " + entry.python)
-                    // lexical check (path text, links are not followed): a venv's interpreter is a link to a Python outside the prefix
-                    def prefix = new File(entry.prefix as String).toPath().toAbsolutePath().normalize()
-                    if (!new File(entry.python as String).toPath().toAbsolutePath().normalize().startsWith(prefix))
-                        throw new IllegalStateException("interpreter is not inside the app's prefix")
-                    if (file.toPath().getFileSystem().supportedFileAttributeViews().contains("posix")) {
-                        def perms = Files.getPosixFilePermissions(file.toPath())
-                        if (perms.any { it.name() in ["GROUP_WRITE", "OTHERS_WRITE"] })
-                            throw new IllegalStateException("registry file is writable by others")
-                    }
-                    def schema = LcJson.parse(new File(entry.schema_path as String))
-                    if ((schema.protocol as double) != 1d) throw new IllegalStateException("unsupported protocol " + schema.protocol)
-                    apps[name] = [entry: entry, schema: schema]
-                } catch (Exception e) {     // broad on purpose: any broken registry entry (I/O, JSON, checks above) is one listed problem, never a failed start
+                    def found = loadFile(file, index == 0)
+                    if (found.problem) { problems << found.problem; skip << (found.name ?: name); continue }
+                    if (apps.containsKey(found.name) || skip.contains(found.name)) continue    // the file name differs from the app name it claims: priority stays with the earlier folder
+                    apps[found.name] = found.app
+                } catch (Exception e) {     // broad on purpose: any broken registry entry (I/O, JSON) is one listed problem, never a failed start
                     LcLog.warn("registry entry '" + name + "' skipped", e)
-                    problems << (name + ": " + e.message)
+                    problems << (file.name + ": " + e.message)
                 }
             }
         }
