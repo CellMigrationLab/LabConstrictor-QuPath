@@ -78,7 +78,7 @@ class LcJson {
     static String pretty(Object o) { PRETTY.toJson(o) }
 }
 
-// ---------------------------------------------------------------------------------------------------- registry
+// ---------------------------------------------------------------------------------------------------- registry and trust checks
 class LcRegistry {
     static final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH", "PYTHONPATH"]
 
@@ -128,7 +128,7 @@ class LcRegistry {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------- worker
+// ---------------------------------------------------------------------------------------------------- the worker
 class LcWorker {
     Process proc
     final Map<String, BlockingQueue<Map>> tasks = new java.util.concurrent.ConcurrentHashMap<>()
@@ -246,7 +246,7 @@ class LcWorker {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------- the dialog
+// ---------------------------------------------------------------------------------------------------- the dialog (the form, the request, running, results, copy as command)
 class LcDialog {
     /** Gson reads every JSON number as a Double: show whole numbers without ".0". */
     static String show(Object v) {
@@ -296,11 +296,25 @@ class LcDialog {
         this.problems = registry.problems
     }
 
-    // ---- window
+    // ---- the form: window and top-level wiring
     void show() {
         stage = new Stage()
         stage.title = "LabConstrictor tools"
         if (qupath?.stage) stage.initOwner(qupath.stage)
+        configureWidgets()
+        def root = new VBox(8, appBox, toolBox, description, formScroll(), runButton, progress, status, messageLabel, keepWorker, buttonRow())
+        root.padding = new Insets(10)
+        if (apps.isEmpty()) {
+            status.text = "No LabConstrictor app is registered on this machine." + (problems ? " Skipped: " + problems.join("; ") : "")
+        }
+        stage.scene = new Scene(root)
+        stage.onHidden = { stopWorker(false) }   // also when closed from code
+        stage.show()
+        if (!apps.isEmpty()) appBox.value = apps.keySet().first()
+    }
+
+    /** Sizes, listeners and actions of the widgets that are fields of the dialog. */
+    void configureWidgets() {
         keepWorker.selected = true
         description.wrapText = true
         description.maxWidth = 560
@@ -319,37 +333,39 @@ class LcDialog {
         cancelButton.onAction = { cancel() }
         detailsButton.disable = true
         detailsButton.onAction = { showDetails() }
-        def rescan = new Button("Rescan apps")
-        rescan.onAction = { rescan() }
-        def restart = new Button("Restart worker")
-        restart.onAction = { stopWorker(true); status.text = "worker stopped" }
-        def copyMenu = new MenuButton("Copy as command")
-        copyMenu.tooltip = new Tooltip("Copy what repeats this run outside QuPath: a terminal line or a Python snippet")
-        def terminalItem = new MenuItem("Terminal command"), pythonItem = new MenuItem("Python snippet")
-        terminalItem.onAction = { copyAsCommand("terminal") }
-        pythonItem.onAction = { copyAsCommand("python") }
-        copyMenu.items.addAll(terminalItem, pythonItem)
-        def buttons = new HBox(6, cancelButton, rescan, restart, detailsButton, copyMenu)
-        def scroll = new ScrollPane(formBox)
-        scroll.fitToWidth = true
-        scroll.prefViewportHeight = 420
-        scroll.prefViewportWidth = 600
-        VBox.setVgrow(scroll, Priority.ALWAYS)
         messageLabel.wrapText = true
         messageLabel.maxWidth = 560
         messageLabel.style = "-fx-border-color: #5a9fd4; -fx-border-width: 0 0 0 3; -fx-padding: 4 8 4 8"
         messageLabel.visible = false
         messageLabel.managed = false
         choiceTimer.onFinished = { resolveChoices() }
-        def root = new VBox(8, appBox, toolBox, description, scroll, runButton, progress, status, messageLabel, keepWorker, buttons)
-        root.padding = new Insets(10)
-        if (apps.isEmpty()) {
-            status.text = "No LabConstrictor app is registered on this machine." + (problems ? " Skipped: " + problems.join("; ") : "")
-        }
-        stage.scene = new Scene(root)
-        stage.onHidden = { stopWorker(false) }   // also when closed from code
-        stage.show()
-        if (!apps.isEmpty()) appBox.value = apps.keySet().first()
+    }
+
+    ScrollPane formScroll() {
+        def scroll = new ScrollPane(formBox)
+        scroll.fitToWidth = true
+        scroll.prefViewportHeight = 420
+        scroll.prefViewportWidth = 600
+        VBox.setVgrow(scroll, Priority.ALWAYS)
+        return scroll
+    }
+
+    HBox buttonRow() {
+        def rescanButton = new Button("Rescan apps")
+        rescanButton.onAction = { rescan() }
+        def restartButton = new Button("Restart worker")
+        restartButton.onAction = { stopWorker(true); status.text = "worker stopped" }
+        return new HBox(6, cancelButton, rescanButton, restartButton, detailsButton, copyMenu())
+    }
+
+    MenuButton copyMenu() {
+        def copyMenu = new MenuButton("Copy as command")
+        copyMenu.tooltip = new Tooltip("Copy what repeats this run outside QuPath: a terminal line or a Python snippet")
+        def terminalItem = new MenuItem("Terminal command"), pythonItem = new MenuItem("Python snippet")
+        terminalItem.onAction = { copyAsCommand("terminal") }
+        pythonItem.onAction = { copyAsCommand("python") }
+        copyMenu.items.addAll(terminalItem, pythonItem)
+        return copyMenu
     }
 
     void rescan() {
@@ -404,41 +420,49 @@ class LcDialog {
         def app = apps[appBox.value]
         def appName = appBox.value
         currentTool.inputs.findAll { it.choices_from && choiceBoxes[it.name] }.each { p ->
-            def request = new LinkedHashMap()
-            boolean ready = true
-            for (dep in p.choices_from.depends) {
-                def v = null
-                try { v = getters[dep]() } catch (Exception e) { LcLog.warn("choices of '" + p.name + "': could not read '" + dep + "' (text field kept)", e) }   // a getter that fails leaves the question not ready
-                def depParam = currentTool.inputs.find { it.name == dep }
-                if (v == null || v.toString().isEmpty() || (depParam.type == "folder" && !new File(v.toString()).isDirectory())) { ready = false; break }
-                request[dep] = v
-            }
+            def request = choiceRequest(p)
             def number = (choiceSeq[p.name] = (choiceSeq[p.name] ?: 0) + 1)
-            if (!ready) { applyChoices(p.name, number, null, "waiting for a value of " + p.choices_from.depends.join(", ")); return }
-            Thread.start("lc-choices") {
-                List options = null
-                String why = null
-                def tmp = Files.createTempDirectory("lcqchoices_").toFile()
-                try {
-                    request["_job_dir"] = tmp.absolutePath
-                    ensureWorker(app, appName)
-                    def outcome = worker.run(p.choices_from.tool as String, request, null)
-                    if (outcome.responseType == "COMPLETION") {
-                        def found = (outcome.outputs?.results ?: []).find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
-                        options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
-                        if (options == null) why = "the source tool '" + p.choices_from.tool + "' did not return a list"
-                    } else {
-                        why = "the source tool '" + p.choices_from.tool + "' did not complete (" + outcome.responseType + ": " + outcome.error + ")"
-                    }
-                } catch (Exception e) {
-                    // broad on purpose (isolation boundary): whatever the source tool or its worker does, the form is never blocked; the text field remains
-                    LcLog.warn("choices of '" + p.name + "' could not be loaded", e)
-                    why = e.class.simpleName + ": " + e.message
-                } finally { LcLog.deleteTemp(tmp) }
-                def failure = why
-                Platform.runLater { applyChoices(p.name, number, options, failure) }
-            }
+            if (request == null) { applyChoices(p.name, number, null, "waiting for a value of " + p.choices_from.depends.join(", ")); return }
+            Thread.start("lc-choices") { fetchChoices(p, request, number, app, appName) }
         }
+    }
+
+    /** The values the source tool needs (the parameters this one depends on), or null while one of them is not ready. */
+    Map choiceRequest(Map p) {
+        def request = new LinkedHashMap()
+        for (dep in p.choices_from.depends) {
+            def v = null
+            try { v = getters[dep]() } catch (Exception e) { LcLog.warn("choices of '" + p.name + "': could not read '" + dep + "' (text field kept)", e) }   // a getter that fails leaves the question not ready
+            def depParam = currentTool.inputs.find { it.name == dep }
+            if (v == null || v.toString().isEmpty() || (depParam.type == "folder" && !new File(v.toString()).isDirectory())) return null
+            request[dep] = v
+        }
+        return request
+    }
+
+    /** Runs the source tool on the worker thread and hands its answer (or why there is none) to applyChoices on the FX thread. */
+    void fetchChoices(Map p, Map request, int number, Map app, String appName) {
+        List options = null
+        String why = null
+        def tmp = Files.createTempDirectory("lcqchoices_").toFile()
+        try {
+            request["_job_dir"] = tmp.absolutePath
+            ensureWorker(app, appName)
+            def outcome = worker.run(p.choices_from.tool as String, request, null)
+            if (outcome.responseType == "COMPLETION") {
+                def found = (outcome.outputs?.results ?: []).find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
+                options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
+                if (options == null) why = "the source tool '" + p.choices_from.tool + "' did not return a list"
+            } else {
+                why = "the source tool '" + p.choices_from.tool + "' did not complete (" + outcome.responseType + ": " + outcome.error + ")"
+            }
+        } catch (Exception e) {
+            // broad on purpose (isolation boundary): whatever the source tool or its worker does, the form is never blocked; the text field remains
+            LcLog.warn("choices of '" + p.name + "' could not be loaded", e)
+            why = e.class.simpleName + ": " + e.message
+        } finally { LcLog.deleteTemp(tmp) }
+        def failure = why
+        Platform.runLater { applyChoices(p.name, number, options, failure) }
     }
 
     /** `why` says why there are no options (the text field is used instead); the reason is logged once and, for a failure, shown in the status line. */
@@ -474,7 +498,7 @@ class LcDialog {
         }
     }
 
-    // ---- images available in QuPath
+    // ---- the form: images available in QuPath
     Map<String, Closure> imageSources() {   // label -> closure returning the ImageServer
         def sources = new LinkedHashMap<String, Closure>()
         def data = qupath?.imageData
@@ -491,7 +515,7 @@ class LcDialog {
         return sources
     }
 
-    // ---- form
+    // ---- the form: building it for the chosen tool
     void buildForm(List inputs) {
         def sources = imageSources()
         def shown = inputs.findAll { !it.advanced }, advanced = inputs.findAll { it.advanced }
@@ -835,7 +859,7 @@ class LcDialog {
         }
     }
 
-    // ---- Copy as command (same text as labconstrictor_tools.command)
+    // ---- copy as command (same text as labconstrictor_tools.command)
     static final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
     static String shellQuote(String text, boolean windows) {
