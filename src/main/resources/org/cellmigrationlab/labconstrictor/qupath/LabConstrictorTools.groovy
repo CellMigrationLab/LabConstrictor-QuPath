@@ -558,196 +558,25 @@ class LcDialog {
         }
     }
 
+    // ---- the form: one control per parameter type, each registering its own node and its getter/setter
+    /** The control of one parameter, wrapped for the form; registers controls, getters, setters, checks and wrappers under the parameter's name. */
     Node makeControl(Map p, Map sources) {
         def name = p.name
-        Node node
-        Closure get, set
+        Map built
         switch (p.type) {
-            case "boolean":
-                def box = new CheckBox()
-                box.selected = p.default == true
-                get = { box.selected }; set = { box.selected = it as boolean }
-                node = box; controls[name] = box
-                break
-            case "choice":
-                def box = new ComboBox<String>()
-                box.items.setAll(p.choices.collect { it.toString() })
-                box.maxWidth = Double.MAX_VALUE
-                if (p.default != null) box.value = p.default.toString() else if (!box.items.isEmpty()) box.value = box.items.first()
-                get = {
-                    def i = box.items.indexOf(box.value)
-                    i >= 0 ? p.choices[i] : null
-                }
-                set = { box.value = it.toString() }
-                node = box; controls[name] = box
-                if (p.widget == "radio" && !p.nullable) {        // Widget("radio"): radio buttons that drive the (hidden) combo box, so every other rule keeps working
-                    def group = new ToggleGroup()
-                    def buttons = box.items.collect { item ->
-                        def rb = new RadioButton(item)
-                        rb.toggleGroup = group
-                        rb.selected = item == box.value
-                        rb.onAction = { box.value = item }
-                        rb
-                    }
-                    box.valueProperty().addListener({ o, a, b -> buttons.each { it.selected = it.text == b } } as javafx.beans.value.ChangeListener)
-                    box.visible = false; box.managed = false
-                    node = new HBox(12, *buttons, box)
-                }
-                break
-            case "integer":
-                def lo = p.minimum != null ? (p.minimum as double).longValue() : -1000000000L
-                def hi = p.maximum != null ? (p.maximum as double).longValue() : 1000000000L
-                def initial = p.default != null ? (p.default as double).longValue() : Math.max(lo, Math.min(hi, 0L))
-                def spinner = new Spinner<Integer>(lo as int, hi as int, initial as int)
-                spinner.editable = true
-                commitOnFocusLost(spinner, p.label as String)
-                get = { spinner.value }; set = { spinner.valueFactory.value = (it as double).intValue() }
-                node = spinner; controls[name] = spinner
-                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {   // Widget("slider"): a slider beside the typed box, kept in step
-                    def slider = new Slider(lo, hi, initial)
-                    slider.maxWidth = Double.MAX_VALUE
-                    HBox.setHgrow(slider, Priority.ALWAYS)
-                    boolean syncing = false
-                    slider.valueProperty().addListener({ o, a, b ->
-                        if (syncing) return
-                        syncing = true
-                        try { spinner.valueFactory.value = Math.round(b as double) as int } finally { syncing = false }
-                    } as javafx.beans.value.ChangeListener)
-                    spinner.valueProperty().addListener({ o, a, b ->
-                        if (syncing || b == null) return
-                        syncing = true
-                        try { slider.value = (b as double) } finally { syncing = false }
-                    } as javafx.beans.value.ChangeListener)
-                    spinner.prefWidth = 110
-                    node = new HBox(8, slider, spinner)
-                }
-                break
-            case "float":
-                def lo = p.minimum != null ? p.minimum as double : -1e12d
-                def hi = p.maximum != null ? p.maximum as double : 1e12d
-                def initial = p.default != null ? p.default as double : Math.max(lo, Math.min(hi, 0d))
-                def step = (hi - lo) <= 100 && p.maximum != null ? (hi - lo) / 100 : 1d
-                def spinner = new Spinner<Double>(lo, hi, initial, step)
-                spinner.editable = true
-                commitOnFocusLost(spinner, p.label as String)
-                get = { spinner.value }; set = { spinner.valueFactory.value = it as double }
-                node = spinner; controls[name] = spinner
-                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {   // Widget("slider"): a slider beside the typed box, kept in step
-                    def slider = new Slider(lo, hi, initial)
-                    slider.maxWidth = Double.MAX_VALUE
-                    HBox.setHgrow(slider, Priority.ALWAYS)
-                    boolean syncing = false
-                    slider.valueProperty().addListener({ o, a, b ->
-                        if (syncing) return
-                        syncing = true
-                        try { spinner.valueFactory.value = (b as double) } finally { syncing = false }
-                    } as javafx.beans.value.ChangeListener)
-                    spinner.valueProperty().addListener({ o, a, b ->
-                        if (syncing || b == null) return
-                        syncing = true
-                        try { slider.value = (b as double) } finally { syncing = false }
-                    } as javafx.beans.value.ChangeListener)
-                    spinner.prefWidth = 110
-                    node = new HBox(8, slider, spinner)
-                }
-                break
+            case "boolean": built = booleanControl(p); break
+            case "choice": built = choiceControl(p); break
+            case "integer": built = integerControl(p); break
+            case "float": built = floatControl(p); break
             case "image":
-            case "labels":
-                def box = new ComboBox<String>()
-                def items = []
-                if (!p.required) items << NO_IMAGE
-                items.addAll(sources.keySet())
-                items << FILE_CHOICE
-                box.items.setAll(items)
-                box.maxWidth = Double.MAX_VALUE
-                def fileField = new TextField()
-                fileField.promptText = "or a file"
-                fileField.maxWidth = Double.MAX_VALUE
-                HBox.setHgrow(fileField, Priority.ALWAYS)
-                def browse = new Button("...")
-                browse.onAction = {
-                    def f = new FileChooser().showOpenDialog(stage)
-                    if (f != null) { fileField.text = f.absolutePath; box.value = FILE_CHOICE }
-                }
-                // sources first, but a tool that takes optional labels starts on "(none)"
-                box.value = p.required ? (sources ? sources.keySet().first() : FILE_CHOICE) : NO_IMAGE
-                imageBoxes[name] = box
-                def sourceMap = sources
-                def channelBox = p.pick_channel ? new ComboBox<String>() : null
-                if (channelBox != null) {                       // PickChannel: the channels (names) of the chosen image; the tool gets only the chosen one
-                    channelBox.maxWidth = Double.MAX_VALUE
-                    channelBoxes[name] = channelBox
-                    def refresh = {
-                        def names = []
-                        try {
-                            def server = box.value == FILE_CHOICE ? (fileField.text?.trim() ? ImageServers.buildServer(fileField.text.trim()) : null) : sourceMap[box.value]?.call()
-                            if (server != null) names = server.metadata.channels.collect { it.name as String }
-                        } catch (Exception e) {      // broad on purpose (a file chooser entry can fail in any reader): the channel list must never break the form
-                            LcLog.warn("channels of '" + name + "' could not be read", e)
-                            status?.text = "Channels of '" + p.label + "' could not be read: " + e.message
-                        }
-                        if (names.size() <= 1) LcLog.once("channels:" + currentTool?.id + ":" + name, "no channel chooser for '" + name + "' (the image has " + names.size() + " channel(s))")
-                        channelBox.items.setAll(names.size() > 1 ? names : [])
-                        channelBox.value = names.size() > 1 ? names.first() : null
-                        channelBox.visible = channelBox.managed = names.size() > 1
-                    }
-                    box.valueProperty().addListener({ o, a, b -> refresh() } as javafx.beans.value.ChangeListener)
-                    fileField.focusedProperty().addListener({ o, a, focused -> if (!focused) refresh() } as javafx.beans.value.ChangeListener)
-                    Platform.runLater { refresh() }
-                }
-                def selectionBox = p.region_of ? new CheckBox("use the selection") : null     // RegionOf: the selected annotations can be the value
-                if (selectionBox != null) {
-                    selectionBox.tooltip = new Tooltip("Send the selected annotations as the region (several are labels 1, 2, 3...)")
-                    selectionBox.selectedProperty().addListener({ o, a, on -> box.disable = on; fileField.disable = on } as javafx.beans.value.ChangeListener)
-                    selectionBoxes[name] = selectionBox
-                }
-                get = {
-                    if (selectionBox != null && selectionBox.selected) return [selection: true]
-                    def v = box.value
-                    if (v == NO_IMAGE) return null
-                    def channel = channelBox != null && channelBox.visible ? channelBox.items.indexOf(channelBox.value) : -1
-                    if (v == FILE_CHOICE) return fileField.text?.trim() ? [file: fileField.text.trim(), channel: channel] : null
-                    return [source: sourceMap[v], channel: channel]
-                }
-                set = { }
-                node = new HBox(6, box, fileField, browse)
-                if (selectionBox != null) node = new VBox(2, node, selectionBox)
-                if (channelBox != null) node = new VBox(2, node, new HBox(6, new Label("Channel"), channelBox))
-                HBox.setHgrow(box, Priority.SOMETIMES)
-                controls[name] = box
-                break
+            case "labels": built = imageControl(p, sources); break
             case "file":
             case "table":
-            case "folder":
-                def field = new TextField()
-                field.maxWidth = Double.MAX_VALUE
-                HBox.setHgrow(field, Priority.ALWAYS)
-                def browse = new Button("...")
-                browse.onAction = {
-                    def f = p.type == "folder" ? new DirectoryChooser().showDialog(stage) : new FileChooser().showOpenDialog(stage)
-                    if (f != null) field.text = f.absolutePath
-                }
-                get = { field.text?.trim() ? field.text.trim() : null }; set = { field.text = it as String }
-                node = new HBox(6, field, browse); controls[name] = field
-                break
-            default: // string
-                def field = new TextField(p.default != null ? p.default.toString() : "")
-                field.maxWidth = Double.MAX_VALUE
-                get = { field.text }; set = { field.text = it as String }
-                node = field; controls[name] = field
-                if (p.choices_from) {            // a dropdown where the source tool can answer, the text field where it cannot
-                    def combo = new ComboBox<String>()
-                    combo.maxWidth = Double.MAX_VALUE
-                    combo.visible = false; combo.managed = false
-                    combo.valueProperty().addListener({ o, a, b ->
-                        if (b == null) return
-                        field.text = b
-                        checks[name]?.selected = b != ""        // picking an option also sets an optional parameter
-                    } as javafx.beans.value.ChangeListener)
-                    choiceBoxes[name] = combo
-                    node = new VBox(2, field, combo)
-                }
+            case "folder": built = fileControl(p); break
+            default: built = stringControl(p)   // string
         }
+        Node node = built.node
+        Closure get = built.get, set = built.set
         if (p.nullable && !p.region_of) {      // optional without a default: unticked = the tool receives None (a region has its own 'use the selection' box)
             def check = new CheckBox("set")
             checks[name] = check
@@ -764,6 +593,200 @@ class LcDialog {
         }
         wrappers[name] = node
         return node
+    }
+
+    Map booleanControl(Map p) {
+        def box = new CheckBox()
+        box.selected = p.default == true
+        controls[p.name] = box
+        return [node: box, get: { box.selected }, set: { box.selected = it as boolean }]
+    }
+
+    Map choiceControl(Map p) {
+        def box = new ComboBox<String>()
+        box.items.setAll(p.choices.collect { it.toString() })
+        box.maxWidth = Double.MAX_VALUE
+        if (p.default != null) box.value = p.default.toString() else if (!box.items.isEmpty()) box.value = box.items.first()
+        controls[p.name] = box
+        Node node = box
+        if (p.widget == "radio" && !p.nullable) node = radioButtonsFor(box)     // Widget("radio")
+        return [node: node,
+                get: { def i = box.items.indexOf(box.value); i >= 0 ? p.choices[i] : null },
+                set: { box.value = it.toString() }]
+    }
+
+    /** Widget("radio"): radio buttons that drive the (hidden) combo box, so every other rule keeps working. */
+    Node radioButtonsFor(ComboBox<String> box) {
+        def group = new ToggleGroup()
+        def buttons = box.items.collect { item ->
+            def rb = new RadioButton(item)
+            rb.toggleGroup = group
+            rb.selected = item == box.value
+            rb.onAction = { box.value = item }
+            rb
+        }
+        box.valueProperty().addListener({ o, a, b -> buttons.each { it.selected = it.text == b } } as javafx.beans.value.ChangeListener)
+        box.visible = false; box.managed = false
+        return new HBox(12, *buttons, box)
+    }
+
+    Map integerControl(Map p) {
+        def lo = p.minimum != null ? (p.minimum as double).longValue() : -1000000000L
+        def hi = p.maximum != null ? (p.maximum as double).longValue() : 1000000000L
+        def initial = p.default != null ? (p.default as double).longValue() : Math.max(lo, Math.min(hi, 0L))
+        def spinner = new Spinner<Integer>(lo as int, hi as int, initial as int)
+        spinner.editable = true
+        commitOnFocusLost(spinner, p.label as String)
+        controls[p.name] = spinner
+        Node node = spinner
+        if (wantsSlider(p)) node = sliderBeside(spinner, lo, hi, initial) { double b -> spinner.valueFactory.value = Math.round(b) as int }
+        return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = (it as double).intValue() }]
+    }
+
+    Map floatControl(Map p) {
+        def lo = p.minimum != null ? p.minimum as double : -1e12d
+        def hi = p.maximum != null ? p.maximum as double : 1e12d
+        def initial = p.default != null ? p.default as double : Math.max(lo, Math.min(hi, 0d))
+        def step = (hi - lo) <= 100 && p.maximum != null ? (hi - lo) / 100 : 1d
+        def spinner = new Spinner<Double>(lo, hi, initial, step)
+        spinner.editable = true
+        commitOnFocusLost(spinner, p.label as String)
+        controls[p.name] = spinner
+        Node node = spinner
+        if (wantsSlider(p)) node = sliderBeside(spinner, lo, hi, initial) { double b -> spinner.valueFactory.value = b }
+        return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = it as double }]
+    }
+
+    static boolean wantsSlider(Map p) { p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null }
+
+    /** Widget("slider"): a slider beside the typed box, kept in step; `toSpinner` puts a slider position into the spinner. */
+    static Node sliderBeside(Spinner spinner, def lo, def hi, def initial, Closure toSpinner) {
+        def slider = new Slider(lo, hi, initial)
+        slider.maxWidth = Double.MAX_VALUE
+        HBox.setHgrow(slider, Priority.ALWAYS)
+        boolean syncing = false
+        slider.valueProperty().addListener({ o, a, b ->
+            if (syncing) return
+            syncing = true
+            try { toSpinner(b as double) } finally { syncing = false }
+        } as javafx.beans.value.ChangeListener)
+        spinner.valueProperty().addListener({ o, a, b ->
+            if (syncing || b == null) return
+            syncing = true
+            try { slider.value = (b as double) } finally { syncing = false }
+        } as javafx.beans.value.ChangeListener)
+        spinner.prefWidth = 110
+        return new HBox(8, slider, spinner)
+    }
+
+    /** An image or label parameter: a QuPath image or a file, optionally one channel of it, optionally the selected annotations (RegionOf). */
+    Map imageControl(Map p, Map sources) {
+        def name = p.name
+        def box = new ComboBox<String>()
+        def items = []
+        if (!p.required) items << NO_IMAGE
+        items.addAll(sources.keySet())
+        items << FILE_CHOICE
+        box.items.setAll(items)
+        box.maxWidth = Double.MAX_VALUE
+        def fileField = new TextField()
+        fileField.promptText = "or a file"
+        fileField.maxWidth = Double.MAX_VALUE
+        HBox.setHgrow(fileField, Priority.ALWAYS)
+        def browse = new Button("...")
+        browse.onAction = {
+            def f = new FileChooser().showOpenDialog(stage)
+            if (f != null) { fileField.text = f.absolutePath; box.value = FILE_CHOICE }
+        }
+        // sources first, but a tool that takes optional labels starts on "(none)"
+        box.value = p.required ? (sources ? sources.keySet().first() : FILE_CHOICE) : NO_IMAGE
+        imageBoxes[name] = box
+        def sourceMap = sources
+        def channelBox = p.pick_channel ? channelChooser(p, box, fileField, sourceMap) : null
+        def selectionBox = p.region_of ? regionSelectionBox(name, box, fileField) : null
+        Node node = new HBox(6, box, fileField, browse)
+        if (selectionBox != null) node = new VBox(2, node, selectionBox)
+        if (channelBox != null) node = new VBox(2, node, new HBox(6, new Label("Channel"), channelBox))
+        HBox.setHgrow(box, Priority.SOMETIMES)
+        controls[name] = box
+        return [node: node, set: { },
+                get: {
+                    if (selectionBox != null && selectionBox.selected) return [selection: true]
+                    def v = box.value
+                    if (v == NO_IMAGE) return null
+                    def channel = channelBox != null && channelBox.visible ? channelBox.items.indexOf(channelBox.value) : -1
+                    if (v == FILE_CHOICE) return fileField.text?.trim() ? [file: fileField.text.trim(), channel: channel] : null
+                    return [source: sourceMap[v], channel: channel]
+                }]
+    }
+
+    /** PickChannel: the channels (names) of the chosen image; the tool gets only the chosen one. */
+    ComboBox<String> channelChooser(Map p, ComboBox<String> box, TextField fileField, Map sourceMap) {
+        def name = p.name
+        def channelBox = new ComboBox<String>()
+        channelBox.maxWidth = Double.MAX_VALUE
+        channelBoxes[name] = channelBox
+        def refresh = {
+            def names = []
+            try {
+                def server = box.value == FILE_CHOICE ? (fileField.text?.trim() ? ImageServers.buildServer(fileField.text.trim()) : null) : sourceMap[box.value]?.call()
+                if (server != null) names = server.metadata.channels.collect { it.name as String }
+            } catch (Exception e) {      // broad on purpose (a file chooser entry can fail in any reader): the channel list must never break the form
+                LcLog.warn("channels of '" + name + "' could not be read", e)
+                status?.text = "Channels of '" + p.label + "' could not be read: " + e.message
+            }
+            if (names.size() <= 1) LcLog.once("channels:" + currentTool?.id + ":" + name, "no channel chooser for '" + name + "' (the image has " + names.size() + " channel(s))")
+            channelBox.items.setAll(names.size() > 1 ? names : [])
+            channelBox.value = names.size() > 1 ? names.first() : null
+            channelBox.visible = channelBox.managed = names.size() > 1
+        }
+        box.valueProperty().addListener({ o, a, b -> refresh() } as javafx.beans.value.ChangeListener)
+        fileField.focusedProperty().addListener({ o, a, focused -> if (!focused) refresh() } as javafx.beans.value.ChangeListener)
+        Platform.runLater { refresh() }
+        return channelBox
+    }
+
+    /** RegionOf: the selected annotations can be the value. */
+    CheckBox regionSelectionBox(String name, ComboBox<String> box, TextField fileField) {
+        def selectionBox = new CheckBox("use the selection")
+        selectionBox.tooltip = new Tooltip("Send the selected annotations as the region (several are labels 1, 2, 3...)")
+        selectionBox.selectedProperty().addListener({ o, a, on -> box.disable = on; fileField.disable = on } as javafx.beans.value.ChangeListener)
+        selectionBoxes[name] = selectionBox
+        return selectionBox
+    }
+
+    Map fileControl(Map p) {
+        def field = new TextField()
+        field.maxWidth = Double.MAX_VALUE
+        HBox.setHgrow(field, Priority.ALWAYS)
+        def browse = new Button("...")
+        browse.onAction = {
+            def f = p.type == "folder" ? new DirectoryChooser().showDialog(stage) : new FileChooser().showOpenDialog(stage)
+            if (f != null) field.text = f.absolutePath
+        }
+        controls[p.name] = field
+        return [node: new HBox(6, field, browse), get: { field.text?.trim() ? field.text.trim() : null }, set: { field.text = it as String }]
+    }
+
+    Map stringControl(Map p) {
+        def name = p.name
+        def field = new TextField(p.default != null ? p.default.toString() : "")
+        field.maxWidth = Double.MAX_VALUE
+        controls[name] = field
+        Node node = field
+        if (p.choices_from) {            // a dropdown where the source tool can answer, the text field where it cannot
+            def combo = new ComboBox<String>()
+            combo.maxWidth = Double.MAX_VALUE
+            combo.visible = false; combo.managed = false
+            combo.valueProperty().addListener({ o, a, b ->
+                if (b == null) return
+                field.text = b
+                checks[name]?.selected = b != ""        // picking an option also sets an optional parameter
+            } as javafx.beans.value.ChangeListener)
+            choiceBoxes[name] = combo
+            node = new VBox(2, field, combo)
+        }
+        return [node: node, get: { field.text }, set: { field.text = it as String }]
     }
 
     void commitOnFocusLost(Spinner spinner, String label = null) {
