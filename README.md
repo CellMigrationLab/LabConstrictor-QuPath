@@ -22,6 +22,15 @@ Without the jar: open `src/main/resources/org/cellmigrationlab/labconstrictor/qu
 * "No match" is a message, not an error. Progress bar, Cancel (a tool that ignores it is killed after 3 s), worker kept between runs (or not), details of the last run, no worker left behind when the window closes.
 * Results are kept in `~/.labconstrictor/results/` (the newest 20), like the command line.
 
+## Fallbacks (intended)
+Each of these is deliberate and is written once to QuPath's log (logger `labconstrictor`) when it happens. Every other failure is logged with its stack trace and shown to the person (status line or Details).
+
+| Where | What happens | What the person sees |
+|---|---|---|
+| `choices_from` parameter (dropdown twin) | The source tool is not ready (a value it depends on is empty), failed, or did not return a list: the text field stays | The plain text field; after a failure the status line says "The choices for '...' could not be loaded (type the value): reason" (first time only) |
+| `PickChannel` image input | The chosen image has one channel (or none can be read): the channel chooser stays hidden and the tool gets the whole image | No Channel chooser; an unreadable file also shows "Channels of '...' could not be read" in the status line |
+| Points / outlines output | The image searched was not the image open in QuPath (a file, or another project image): nothing is added to the open image | The table (points) or the line "Not placed on an image (...)" in the results window |
+
 ## Not done yet
 * Only whole images are exported (no region or annotation selection); RGB / brightfield images are exported as RGB TIFF.
 * Label images are shown as a preview, not converted to QuPath annotations/detections, and tables are not added to the measurements.
@@ -38,5 +47,7 @@ Without the jar: open `src/main/resources/org/cellmigrationlab/labconstrictor/qu
 `BODY=gui_test_channel_body.groovy tests/run_gui_test.sh` checks the channel chooser of `PickChannel` inputs with a 3-channel TIFF (the tool receives only the chosen channel; 4 checks).
 
 `BODY=gui_test_adversarial_body.groovy tests/run_gui_test.sh` throws odd input at the hints (a broken or malformed source tool, 5000 unicode options, a default the source does not list, empty and 50 000 points, a very long message, a failing run); register `tests/adversarial_app` as `adv` first (12 checks).
+
+``BODY=gui_test_fallbacks_body.groovy tests/run_gui_test.sh` checks that failures that used to be silent are reported (bad number typed into a field, unreadable value in Copy as command, host failure with stack trace in Details, unreadable channel file, intended fallbacks logged; 12 checks; needs the `interactions` example app in `LC_HOME`).
 
 `tests/gui_test_body.groovy` drives the real dialog in QuPath on a virtual screen (project with two calibrated images, both apps) and writes screenshots.
