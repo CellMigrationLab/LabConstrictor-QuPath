@@ -13,7 +13,6 @@
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import javafx.application.Platform
-import javafx.beans.binding.Bindings
 import javafx.geometry.Insets
 import javafx.scene.Node
 import javafx.scene.Scene

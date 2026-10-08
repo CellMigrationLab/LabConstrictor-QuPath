@@ -1,0 +1,88 @@
+{
+  // Config of npm-groovy-lint (CodeNarc rules) for src/main/resources/.../LabConstrictorTools.groovy; run by .github/workflows/lint.yml.
+  // The script is dynamic Groovy that reads JSON maps and builds JavaFX forms; every rule switched off below has its reason on the line above it.
+  // Everything else in the "recommended" set stays on and must pass (the build fails on any finding).
+  "extends": "recommended",
+  "rules": {
+    // Style: double quotes everywhere; switching to single quotes would touch hundreds of lines for no gain.
+    "UnnecessaryGString": "off",
+    // Style: the script is dynamically typed on purpose (values come from JSON maps and closures), so def and untyped variables are normal.
+    "NoDef": "off",
+    "VariableTypeRequired": "off",
+    "MethodParameterTypeRequired": "off",
+    "MethodReturnTypeRequired": "off",
+    "CompileStatic": "off",
+    // Style: UI texts and JSON keys ("image", "labels", "name") repeat by nature; a constant for each would hide the text.
+    "DuplicateStringLiteral": "off",
+    "DuplicateNumberLiteral": "off",
+    "DuplicateListLiteral": "off",
+    // Style: short closures use Groovy's implicit `it`.
+    "ImplicitClosureParameter": "off",
+    // Style: JavaFX code reads better with explicit getX()/setX() calls where it mixes with property syntax.
+    "UnnecessaryGetter": "off",
+    "UnnecessarySetter": "off",
+    // Style: one-line handlers and guards (`if (x) return`) are this file's convention; reformatting 150+ lines is not a behaviour-preserving review.
+    "LineLength": "off",
+    "IfStatementBraces": "off",
+    "ElseBlockBraces": "off",
+    "ForStatementBraces": "off",
+    "WhileStatementBraces": "off",
+    "BracesForIfElse": "off",
+    "Indentation": "off",
+    "ClassStartsWithBlankLine": "off",
+    "ClassEndsWithBlankLine": "off",
+    // Style: member order follows the story of the code (a helper sits beside its caller), not static-before-instance.
+    "StaticMethodsBeforeInstanceMethods": "off",
+    "PublicMethodsBeforeNonPublicMethods": "off",
+    "StaticFieldsBeforeInstanceFields": "off",
+    // Style: `return` is written out on purpose; a few Groovy shortcuts (a switch, a null check) are not worth rewriting.
+    "ImplicitReturnStatement": "off",
+    "CouldBeSwitchStatement": "off",
+    "UnnecessaryNullCheck": "off",
+    "UnnecessaryCollectCall": "off",
+    "NestedForLoop": "off",
+    // Style: the JavaFX controls are imported as javafx.scene.control.* and javafx.scene.layout.*, the way QuPath's own scripts do.
+    "NoWildcardImports": "off",
+    // File size: the dialog is one class on purpose (a script that can be pasted into QuPath); splitting it is the function-split theme, not lint.
+    "ClassSize": "off",
+    "MethodCount": "off",
+    // The script reads and writes files through java.io.File (registry, results, temp folders); there is no other file API in a QuPath script.
+    "JavaIoPackageAccess": "off",
+    // JSON values arrive as Map / List / Double / String / Boolean; instanceof is how they are told apart.
+    "Instanceof": "off",
+    // Gson reads every JSON number as a double; the script has to handle doubles.
+    "NoDouble": "off",
+    // Intended broad catches at isolation boundaries (worker, run thread, listeners): each logs through LcLog and says why it is broad.
+    "CatchException": "off",
+    // The one RuntimeException catch rethrows everything but JavaFX's wrapped number-format errors (see commitSpinner).
+    "CatchRuntimeException": "off",
+    // readFormValues returns null on purpose after it has put the reason in the status line; the caller checks for null.
+    "ReturnNullFromCatchBlock": "off",
+    // A null Map or List means "not ready / nothing to do" in choiceRequest and in the registry readers; callers test for null.
+    "ReturnsNullInsteadOfEmptyCollection": "off",
+    // Style: explicit new LinkedHashMap() / ArrayList / HashSet say "order matters / this is a set" more clearly than [:] and [].
+    "ExplicitLinkedHashMapInstantiation": "off",
+    "ExplicitArrayListInstantiation": "off",
+    "ExplicitHashSetInstantiation": "off",
+    // LcLog keeps `recent` (a list the tests read) and `seen` as lower-case statics, not constants.
+    "PropertyName": "off",
+    "FieldName": "off",
+    // LcJson.pretty() and LcJson.PRETTY are a function and the Gson instance it uses.
+    "ConfusingMethodName": "off",
+    // The Windows check in LcRegistry.searchPath writes a Windows default path on purpose.
+    "HardCodedWindowsFileSeparator": "off",
+    // LcWorker.send is synchronized so that a run and a cancel never interleave their JSON lines.
+    "SynchronizedMethod": "off",
+    // LcWorker.close() ends the process; it does not implement Closeable because nothing uses it with try-with-resources.
+    "CloseWithoutCloseable": "off",
+    // buildForm builds the form into the dialog's own box (a void method by design); it is not a factory.
+    "BuilderMethodWithSideEffects": "off",
+    "FactoryMethodName": "off",
+    // selectionMask has an unused appName parameter; dropping it changes a method signature, which is a refactor outside this pass.
+    "UnusedMethodParameter": "off",
+    // The folder stamp (yyyyMMdd'T'HHmmss) uses the default locale as before; a Locale would change the names in some locales.
+    "SimpleDateFormatMissingLocale": "off",
+    // The label colour step is a deliberate `% 1d` (fractional part of the product), not a mistake.
+    "UnnecessaryModOne": "off"
+  }
+}

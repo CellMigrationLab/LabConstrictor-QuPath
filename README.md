@@ -51,4 +51,12 @@ Each of these is deliberate and is written once to QuPath's log (logger `labcons
 ``BODY=gui_test_fallbacks_body.groovy tests/run_gui_test.sh` checks that failures that used to be silent are reported (bad number typed into a field, unreadable value in Copy as command, host failure with stack trace in Details, unreadable channel file, intended fallbacks logged; 12 checks; needs the `interactions` example app in `LC_HOME`).
 `BODY=gui_test_buttons_body.groovy tests/run_gui_test.sh` clicks "Rescan apps" and "Restart worker" (3 checks; on the version before the split the Rescan button threw `MissingMethodException` because a local variable named `rescan` shadowed the method).
 
+### Lint (runs in CI) and what CI does not run
+
+`.github/workflows/lint.yml` lints `LabConstrictorTools.groovy` with `npm-groovy-lint` (pinned version, CodeNarc rules, config in `.groovylintrc.json`; each disabled rule has its reason there). It fails on any finding, including info. Run it locally (needs Node and Java):
+
+    npx --yes npm-groovy-lint@18.0.0 --path src/main/resources/org/cellmigrationlab/labconstrictor/qupath --files "**/*.groovy" --failon info
+
+The GUI tests above are **not** run in CI: they need a real QuPath (0.7, Java 25), a virtual display and registered LabConstrictor apps, which a GitHub runner does not have. Run them by hand with `tests/run_gui_test.sh` before merging a change to the script.
+
 `tests/gui_test_body.groovy` drives the real dialog in QuPath on a virtual screen (project with two calibrated images, both apps) and writes screenshots.
