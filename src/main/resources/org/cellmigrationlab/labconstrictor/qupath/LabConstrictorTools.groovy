@@ -1165,51 +1165,67 @@ class LcDialog {
     void showResults(String appName, String toolLabel, List results) {
         def box = new VBox(10)
         box.padding = new Insets(10)
-        for (r in results) {
-            switch (r.type) {
-                case "values":
-                    def grid = newGrid()
-                    int row = 0
-                    r.values.each { k, v -> grid.add(new Label(k.toString()), 0, row); def l = new Label(show(v)); l.wrapText = true; grid.add(l, 1, row++) }
-                    box.children.addAll(boldLabel(r.name ?: "values"), grid)
-                    break
-                case "message":
-                    def text = (r.text as String).replaceAll(/\*\*(.+?)\*\*/, '$1')
-                    messageLabel.text = (messageLabel.text && messageLabel.visible ? messageLabel.text + "\n\n" : "") + text
-                    messageLabel.visible = true; messageLabel.managed = true
-                    break
-                case "points":
-                    box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String))
-                    break
-                case "shapes":
-                    box.children.addAll(boldLabel((r.name ?: "shapes") + " (outlines)"), wrapped(placeShapes(appName, r)))
-                    break
-                case ["image", "labels"]:
-                    def open = new Button("Open in QuPath")
-                    def path = r.path as String
-                    try { box.children.add(previewNode(path, r.type == "labels")) } catch (Exception e) { LcLog.warn("no preview for " + path, e); box.children.add(new Label("(no preview: " + e.message + ")")) }
-                    open.onAction = {
-                        try { qupath.openImage(qupath.viewer, path, false, false) } catch (Exception e) { LcLog.warn("cannot open " + path, e); status.text = "cannot open: " + e.message }
-                    }
-                    def l = new Label(path); l.wrapText = true
-                    box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ", axes " + (r.axes ?: "?") + ")"), l, open)
-                    break
-                case "table":
-                    box.children.addAll(boldLabel(r.name ?: "table"), tableView(r.path as String))
-                    break
-                case "affine":
-                    def m = r.matrix_yx
-                    def txt = (m instanceof List) ? m.collect { row -> row.collect { String.format("%.5f", it as double) }.join("   ") }.join("\n") : m.toString()
-                    def l = new Label(txt); l.style = "-fx-font-family: monospace"
-                    box.children.addAll(boldLabel((r.name ?: "alignment") + ": " + (r.apply_to ?: "") + " relative to " + (r.relative_to ?: "")), l)
-                    break
-                default:
-                    box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ")"), new Label((r.path ?: r.toString()) as String))
-            }
+        for (r in results) addResult(box, appName, r)
+        showResultWindow(box, appName, toolLabel)
+    }
+
+    /** One output of the tool becomes its part of the results window (a "message" goes to the form instead). */
+    void addResult(VBox box, String appName, Map r) {
+        switch (r.type) {
+            case "values": box.children.addAll(valuesSection(r)); break
+            case "message":
+                def text = (r.text as String).replaceAll(/\*\*(.+?)\*\*/, '$1')
+                messageLabel.text = (messageLabel.text && messageLabel.visible ? messageLabel.text + "\n\n" : "") + text
+                messageLabel.visible = true; messageLabel.managed = true
+                break
+            case "points":
+                box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String))
+                break
+            case "shapes":
+                box.children.addAll(boldLabel((r.name ?: "shapes") + " (outlines)"), wrapped(placeShapes(appName, r)))
+                break
+            case ["image", "labels"]: box.children.addAll(imageSection(r)); break
+            case "table":
+                box.children.addAll(boldLabel(r.name ?: "table"), tableView(r.path as String))
+                break
+            case "affine": box.children.addAll(affineSection(r)); break
+            default:
+                box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ")"), new Label((r.path ?: r.toString()) as String))
         }
+    }
+
+    List<Node> valuesSection(Map r) {
+        def grid = newGrid()
+        int row = 0
+        r.values.each { k, v -> grid.add(new Label(k.toString()), 0, row); def l = new Label(show(v)); l.wrapText = true; grid.add(l, 1, row++) }
+        return [boldLabel(r.name ?: "values"), grid]
+    }
+
+    List<Node> imageSection(Map r) {
+        def nodes = []
+        def open = new Button("Open in QuPath")
+        def path = r.path as String
+        try { nodes.add(previewNode(path, r.type == "labels")) } catch (Exception e) { LcLog.warn("no preview for " + path, e); nodes.add(new Label("(no preview: " + e.message + ")")) }
+        open.onAction = {
+            try { qupath.openImage(qupath.viewer, path, false, false) } catch (Exception e) { LcLog.warn("cannot open " + path, e); status.text = "cannot open: " + e.message }
+        }
+        def l = new Label(path); l.wrapText = true
+        nodes.addAll([boldLabel((r.name ?: r.type) + " (" + r.type + ", axes " + (r.axes ?: "?") + ")"), l, open])
+        return nodes
+    }
+
+    static List<Node> affineSection(Map r) {
+        def m = r.matrix_yx
+        def txt = (m instanceof List) ? m.collect { row -> row.collect { String.format("%.5f", it as double) }.join("   ") }.join("\n") : m.toString()
+        def l = new Label(txt); l.style = "-fx-font-family: monospace"
+        return [boldLabel((r.name ?: "alignment") + ": " + (r.apply_to ?: "") + " relative to " + (r.relative_to ?: "")), l]
+    }
+
+    /** Replace(): the next run's results take the place of the last ones in the same window. */
+    void showResultWindow(VBox box, String appName, String toolLabel) {
         def key = appName + "/" + toolLabel
         def replacing = currentTool?.outputs?.any { it.replace } && resultWindows[key]?.showing
-        def stage2 = replacing ? resultWindows[key] : new Stage()     // Replace(): the next run's results take the place of the last ones
+        def stage2 = replacing ? resultWindows[key] : new Stage()
         stage2.title = appName + ": " + toolLabel
         if (!replacing) stage2.initOwner(stage)
         def sc = new ScrollPane(box)
@@ -1221,12 +1237,18 @@ class LcDialog {
     }
     Stage lastResultStage
 
-    /** Points go on the image they were found in when that was the image open in QuPath; otherwise only the table is shown. */
-    String placePoints(String appName, Map r) {
+    /** The image open in QuPath when an output's results were found in it (the image parameter was "Current image" for this run); otherwise null. */
+    def openImageFor(Map r) {
         def data = qupath?.imageData
         def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
         def chosen = target ? imageChoiceAtRun[target] : null
-        if (data == null || chosen == null || !chosen.startsWith("Current image"))
+        return (data == null || chosen == null || !chosen.startsWith("Current image")) ? null : data
+    }
+
+    /** Points go on the image they were found in when that was the image open in QuPath; otherwise only the table is shown. */
+    String placePoints(String appName, Map r) {
+        def data = openImageFor(r)
+        if (data == null)
         {
             LcLog.once("points-not-placed:" + appName + ":" + r.name, "points '" + r.name + "' not placed: they were not found in the image open in QuPath (table only)")
             return "Not placed on an image (the points were not found in the image open in QuPath)."
@@ -1258,19 +1280,34 @@ class LcDialog {
      *  on the image they were found in (when that was the image open in QuPath); holes and parts are kept; numeric properties become
      *  measurements. Replace() removes the previous annotations of this output. */
     String placeShapes(String appName, Map r) {
-        def data = qupath?.imageData
-        def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
-        def chosen = target ? imageChoiceAtRun[target] : null
-        if (data == null || chosen == null || !chosen.startsWith("Current image"))
+        def data = openImageFor(r)
+        if (data == null)
         {
             LcLog.once("shapes-not-placed:" + appName + ":" + r.name, "outlines '" + r.name + "' not placed: they were not found in the image open in QuPath")
             return "Not placed on an image (the outlines were not found in the image open in QuPath)."
         }
         def collection = new Gson().fromJson(new File(r.path as String).getText("UTF-8"), Map)
+        def prefix = appName + ":" + r.name
+        def built = shapeAnnotations(collection, prefix)
+        def objects = built.objects, holes = built.holes, total = collection.features.size()
+        def hierarchy = data.hierarchy
+        def replacing = currentTool.outputs.any { it.name == r.name && it.replace }
+        if (replacing) {
+            def previous = hierarchy.annotationObjects.findAll { it.name?.startsWith(prefix + " ") }
+            if (previous) hierarchy.removeObjects(previous, true)       // Replace()
+        }
+        hierarchy.addObjects(objects)
+        def text = objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>'."
+        if (total > MAX_SHAPES) text += " Showing the first " + MAX_SHAPES + " of " + total + "."
+        if (holes) text += " " + holes + " outline(s) have holes (kept)."
+        return text
+    }
+
+    /** One annotation per GeoJSON feature (at most MAX_SHAPES), and the number of polygon parts that have holes. */
+    Map shapeAnnotations(Map collection, String prefix) {
         def factory = new org.locationtech.jts.geom.GeometryFactory()
         def ring = { List points -> factory.createLinearRing(points.collect { new org.locationtech.jts.geom.Coordinate((it[0] as double) + 0.5d, (it[1] as double) + 0.5d) } as org.locationtech.jts.geom.Coordinate[]) }   // pixel centres
-        def prefix = appName + ":" + r.name
-        def objects = [], holes = 0, total = collection.features.size()
+        def objects = [], holes = 0
         for (feature in collection.features) {
             if (objects.size() >= MAX_SHAPES) break
             def geometry = feature.geometry
@@ -1287,17 +1324,7 @@ class LcDialog {
             feature.get("properties")?.each { k, v -> if (v instanceof Number) obj.measurementList.put(k.toString(), v as double) }   // numeric properties become measurements
             objects << obj
         }
-        def hierarchy = data.hierarchy
-        def replacing = currentTool.outputs.any { it.name == r.name && it.replace }
-        if (replacing) {
-            def previous = hierarchy.annotationObjects.findAll { it.name?.startsWith(prefix + " ") }
-            if (previous) hierarchy.removeObjects(previous, true)       // Replace()
-        }
-        hierarchy.addObjects(objects)
-        def text = objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>'."
-        if (total > MAX_SHAPES) text += " Showing the first " + MAX_SHAPES + " of " + total + "."
-        if (holes) text += " " + holes + " outline(s) have holes (kept)."
-        return text
+        return [objects: objects, holes: holes]
     }
 
     /** A small preview of a result image (first plane, first channel, scaled to the window); labels get a colour per label. */
