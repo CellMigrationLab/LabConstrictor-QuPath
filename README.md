@@ -1,12 +1,12 @@
 # LabConstrictor for QuPath
 
-**Run Python image analysis on a selected part of a whole-slide image—and put the results back in the right place.**
+**Run registered Python tools on QuPath image regions.**
 
 LabConstrictor connects QuPath to tools installed with LabConstrictor applications. You choose an image or region in QuPath, run a tool in the application's own Python environment, and inspect the results without moving your analysis code into QuPath.
 
-This is a **prototype for QuPath 0.7**. It is useful for testing region-based workflows, but not yet a replacement for native QuPath measurements or detections.
+This is a **prototype for QuPath 0.7**. It does not convert label images into native detections or add result tables to object measurements.
 
-## Try a region-based analysis
+## Run a tool on an image region
 
 1. Install and register a LabConstrictor application with image-analysis tools.
 2. Open an image in QuPath and select one or more annotations.
@@ -30,7 +30,7 @@ The extension builds a form from the tool's declared Python inputs. It supports 
 
 When multiple inputs require different image areas, the bridge refuses the run instead of silently combining incompatible coordinate systems.
 
-### Large slides: an intentional size limit
+### Export size limit
 
 Before exporting an image from QuPath, the extension checks the width × height of the exported area. The default limit is **100 million pixels per plane**. Above that, the run stops with an explanation and asks you to select a smaller area or use a file.
 
@@ -71,7 +71,7 @@ src/main/resources/org/cellmigrationlab/labconstrictor/qupath/LabConstrictorTool
 
 QuPath does not need the application's Python packages. The bridge launches the tool worker in the registered application's interpreter.
 
-## Limitations worth knowing
+## Limitations
 
 - QuPath 0.7 is the current target; native Windows and macOS testing is still needed.
 - Image export is full-resolution only. There is no user-selectable downsample or target pixel size yet.
@@ -86,7 +86,7 @@ The shared log is under `~/.labconstrictor/logs/` by default. Use **Details** wh
 
 The main extension script is `src/main/resources/org/cellmigrationlab/labconstrictor/qupath/LabConstrictorTools.groovy`. It contains the registry reader, worker connection, form, image export, coordinate conversion and result presentation.
 
-The GUI tests require a real QuPath installation and are **not run in CI**. To run them on Linux:
+The GUI tests require a real QuPath installation. They were not run for this documentation change. To run them on Linux:
 
 ```bash
 QUPATH=/path/to/QuPath JAVA_HOME=/path/to/jdk25 ./build.sh
