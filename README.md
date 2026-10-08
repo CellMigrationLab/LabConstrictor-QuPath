@@ -49,5 +49,6 @@ Each of these is deliberate and is written once to QuPath's log (logger `labcons
 `BODY=gui_test_adversarial_body.groovy tests/run_gui_test.sh` throws odd input at the hints (a broken or malformed source tool, 5000 unicode options, a default the source does not list, empty and 50 000 points, a very long message, a failing run); register `tests/adversarial_app` as `adv` first (12 checks).
 
 ``BODY=gui_test_fallbacks_body.groovy tests/run_gui_test.sh` checks that failures that used to be silent are reported (bad number typed into a field, unreadable value in Copy as command, host failure with stack trace in Details, unreadable channel file, intended fallbacks logged; 12 checks; needs the `interactions` example app in `LC_HOME`).
+`BODY=gui_test_buttons_body.groovy tests/run_gui_test.sh` clicks "Rescan apps" and "Restart worker" (3 checks; on the version before the split the Rescan button threw `MissingMethodException` because a local variable named `rescan` shadowed the method).
 
 `tests/gui_test_body.groovy` drives the real dialog in QuPath on a virtual screen (project with two calibrated images, both apps) and writes screenshots.

@@ -78,7 +78,7 @@ class LcJson {
     static String pretty(Object o) { PRETTY.toJson(o) }
 }
 
-// ---------------------------------------------------------------------------------------------------- registry
+// ---------------------------------------------------------------------------------------------------- registry and trust checks
 class LcRegistry {
     static final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH", "PYTHONPATH"]
 
@@ -128,7 +128,7 @@ class LcRegistry {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------- worker
+// ---------------------------------------------------------------------------------------------------- the worker
 class LcWorker {
     Process proc
     final Map<String, BlockingQueue<Map>> tasks = new java.util.concurrent.ConcurrentHashMap<>()
@@ -246,7 +246,7 @@ class LcWorker {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------- the dialog
+// ---------------------------------------------------------------------------------------------------- the dialog (the form, the request, running, results, copy as command)
 class LcDialog {
     /** Gson reads every JSON number as a Double: show whole numbers without ".0". */
     static String show(Object v) {
@@ -296,11 +296,25 @@ class LcDialog {
         this.problems = registry.problems
     }
 
-    // ---- window
+    // ---- the form: window and top-level wiring
     void show() {
         stage = new Stage()
         stage.title = "LabConstrictor tools"
         if (qupath?.stage) stage.initOwner(qupath.stage)
+        configureWidgets()
+        def root = new VBox(8, appBox, toolBox, description, formScroll(), runButton, progress, status, messageLabel, keepWorker, buttonRow())
+        root.padding = new Insets(10)
+        if (apps.isEmpty()) {
+            status.text = "No LabConstrictor app is registered on this machine." + (problems ? " Skipped: " + problems.join("; ") : "")
+        }
+        stage.scene = new Scene(root)
+        stage.onHidden = { stopWorker(false) }   // also when closed from code
+        stage.show()
+        if (!apps.isEmpty()) appBox.value = apps.keySet().first()
+    }
+
+    /** Sizes, listeners and actions of the widgets that are fields of the dialog. */
+    void configureWidgets() {
         keepWorker.selected = true
         description.wrapText = true
         description.maxWidth = 560
@@ -319,37 +333,39 @@ class LcDialog {
         cancelButton.onAction = { cancel() }
         detailsButton.disable = true
         detailsButton.onAction = { showDetails() }
-        def rescan = new Button("Rescan apps")
-        rescan.onAction = { rescan() }
-        def restart = new Button("Restart worker")
-        restart.onAction = { stopWorker(true); status.text = "worker stopped" }
-        def copyMenu = new MenuButton("Copy as command")
-        copyMenu.tooltip = new Tooltip("Copy what repeats this run outside QuPath: a terminal line or a Python snippet")
-        def terminalItem = new MenuItem("Terminal command"), pythonItem = new MenuItem("Python snippet")
-        terminalItem.onAction = { copyAsCommand("terminal") }
-        pythonItem.onAction = { copyAsCommand("python") }
-        copyMenu.items.addAll(terminalItem, pythonItem)
-        def buttons = new HBox(6, cancelButton, rescan, restart, detailsButton, copyMenu)
-        def scroll = new ScrollPane(formBox)
-        scroll.fitToWidth = true
-        scroll.prefViewportHeight = 420
-        scroll.prefViewportWidth = 600
-        VBox.setVgrow(scroll, Priority.ALWAYS)
         messageLabel.wrapText = true
         messageLabel.maxWidth = 560
         messageLabel.style = "-fx-border-color: #5a9fd4; -fx-border-width: 0 0 0 3; -fx-padding: 4 8 4 8"
         messageLabel.visible = false
         messageLabel.managed = false
         choiceTimer.onFinished = { resolveChoices() }
-        def root = new VBox(8, appBox, toolBox, description, scroll, runButton, progress, status, messageLabel, keepWorker, buttons)
-        root.padding = new Insets(10)
-        if (apps.isEmpty()) {
-            status.text = "No LabConstrictor app is registered on this machine." + (problems ? " Skipped: " + problems.join("; ") : "")
-        }
-        stage.scene = new Scene(root)
-        stage.onHidden = { stopWorker(false) }   // also when closed from code
-        stage.show()
-        if (!apps.isEmpty()) appBox.value = apps.keySet().first()
+    }
+
+    ScrollPane formScroll() {
+        def scroll = new ScrollPane(formBox)
+        scroll.fitToWidth = true
+        scroll.prefViewportHeight = 420
+        scroll.prefViewportWidth = 600
+        VBox.setVgrow(scroll, Priority.ALWAYS)
+        return scroll
+    }
+
+    HBox buttonRow() {
+        def rescanButton = new Button("Rescan apps")
+        rescanButton.onAction = { rescan() }
+        def restartButton = new Button("Restart worker")
+        restartButton.onAction = { stopWorker(true); status.text = "worker stopped" }
+        return new HBox(6, cancelButton, rescanButton, restartButton, detailsButton, copyMenu())
+    }
+
+    MenuButton copyMenu() {
+        def copyMenu = new MenuButton("Copy as command")
+        copyMenu.tooltip = new Tooltip("Copy what repeats this run outside QuPath: a terminal line or a Python snippet")
+        def terminalItem = new MenuItem("Terminal command"), pythonItem = new MenuItem("Python snippet")
+        terminalItem.onAction = { copyAsCommand("terminal") }
+        pythonItem.onAction = { copyAsCommand("python") }
+        copyMenu.items.addAll(terminalItem, pythonItem)
+        return copyMenu
     }
 
     void rescan() {
@@ -404,45 +420,49 @@ class LcDialog {
         def app = apps[appBox.value]
         def appName = appBox.value
         currentTool.inputs.findAll { it.choices_from && choiceBoxes[it.name] }.each { p ->
-            def request = new LinkedHashMap()
-            boolean ready = true
-            for (dep in p.choices_from.depends) {
-                def v = null
-                try { v = getters[dep]() } catch (Exception e) { LcLog.warn("choices of '" + p.name + "': could not read '" + dep + "' (text field kept)", e) }   // a getter that fails leaves the question not ready
-                def depParam = currentTool.inputs.find { it.name == dep }
-                if (v == null || v.toString().isEmpty() || (depParam.type == "folder" && !new File(v.toString()).isDirectory())) { ready = false; break }
-                request[dep] = v
-            }
+            def request = choiceRequest(p)
             def number = (choiceSeq[p.name] = (choiceSeq[p.name] ?: 0) + 1)
-            if (!ready) { applyChoices(p.name, number, null, "waiting for a value of " + p.choices_from.depends.join(", ")); return }
-            Thread.start("lc-choices") {
-                List options = null
-                String why = null
-                def tmp = Files.createTempDirectory("lcqchoices_").toFile()
-                try {
-                    request["_job_dir"] = tmp.absolutePath
-                    if (worker == null || workerApp != appName || worker.closed || !worker.proc.isAlive()) {
-                        stopWorker(false)
-                        worker = new LcWorker(app.entry)
-                        workerApp = appName
-                    }
-                    def outcome = worker.run(p.choices_from.tool as String, request, null)
-                    if (outcome.responseType == "COMPLETION") {
-                        def found = (outcome.outputs?.results ?: []).find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
-                        options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
-                        if (options == null) why = "the source tool '" + p.choices_from.tool + "' did not return a list"
-                    } else {
-                        why = "the source tool '" + p.choices_from.tool + "' did not complete (" + outcome.responseType + ": " + outcome.error + ")"
-                    }
-                } catch (Exception e) {
-                    // broad on purpose (isolation boundary): whatever the source tool or its worker does, the form is never blocked; the text field remains
-                    LcLog.warn("choices of '" + p.name + "' could not be loaded", e)
-                    why = e.class.simpleName + ": " + e.message
-                } finally { LcLog.deleteTemp(tmp) }
-                def failure = why
-                Platform.runLater { applyChoices(p.name, number, options, failure) }
-            }
+            if (request == null) { applyChoices(p.name, number, null, "waiting for a value of " + p.choices_from.depends.join(", ")); return }
+            Thread.start("lc-choices") { fetchChoices(p, request, number, app, appName) }
         }
+    }
+
+    /** The values the source tool needs (the parameters this one depends on), or null while one of them is not ready. */
+    Map choiceRequest(Map p) {
+        def request = new LinkedHashMap()
+        for (dep in p.choices_from.depends) {
+            def v = null
+            try { v = getters[dep]() } catch (Exception e) { LcLog.warn("choices of '" + p.name + "': could not read '" + dep + "' (text field kept)", e) }   // a getter that fails leaves the question not ready
+            def depParam = currentTool.inputs.find { it.name == dep }
+            if (v == null || v.toString().isEmpty() || (depParam.type == "folder" && !new File(v.toString()).isDirectory())) return null
+            request[dep] = v
+        }
+        return request
+    }
+
+    /** Runs the source tool on the worker thread and hands its answer (or why there is none) to applyChoices on the FX thread. */
+    void fetchChoices(Map p, Map request, int number, Map app, String appName) {
+        List options = null
+        String why = null
+        def tmp = Files.createTempDirectory("lcqchoices_").toFile()
+        try {
+            request["_job_dir"] = tmp.absolutePath
+            ensureWorker(app, appName)
+            def outcome = worker.run(p.choices_from.tool as String, request, null)
+            if (outcome.responseType == "COMPLETION") {
+                def found = (outcome.outputs?.results ?: []).find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
+                options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
+                if (options == null) why = "the source tool '" + p.choices_from.tool + "' did not return a list"
+            } else {
+                why = "the source tool '" + p.choices_from.tool + "' did not complete (" + outcome.responseType + ": " + outcome.error + ")"
+            }
+        } catch (Exception e) {
+            // broad on purpose (isolation boundary): whatever the source tool or its worker does, the form is never blocked; the text field remains
+            LcLog.warn("choices of '" + p.name + "' could not be loaded", e)
+            why = e.class.simpleName + ": " + e.message
+        } finally { LcLog.deleteTemp(tmp) }
+        def failure = why
+        Platform.runLater { applyChoices(p.name, number, options, failure) }
     }
 
     /** `why` says why there are no options (the text field is used instead); the reason is logged once and, for a failure, shown in the status line. */
@@ -478,7 +498,7 @@ class LcDialog {
         }
     }
 
-    // ---- images available in QuPath
+    // ---- the form: images available in QuPath
     Map<String, Closure> imageSources() {   // label -> closure returning the ImageServer
         def sources = new LinkedHashMap<String, Closure>()
         def data = qupath?.imageData
@@ -495,7 +515,7 @@ class LcDialog {
         return sources
     }
 
-    // ---- form
+    // ---- the form: building it for the chosen tool
     void buildForm(List inputs) {
         def sources = imageSources()
         def shown = inputs.findAll { !it.advanced }, advanced = inputs.findAll { it.advanced }
@@ -558,196 +578,25 @@ class LcDialog {
         }
     }
 
+    // ---- the form: one control per parameter type, each registering its own node and its getter/setter
+    /** The control of one parameter, wrapped for the form; registers controls, getters, setters, checks and wrappers under the parameter's name. */
     Node makeControl(Map p, Map sources) {
         def name = p.name
-        Node node
-        Closure get, set
+        Map built
         switch (p.type) {
-            case "boolean":
-                def box = new CheckBox()
-                box.selected = p.default == true
-                get = { box.selected }; set = { box.selected = it as boolean }
-                node = box; controls[name] = box
-                break
-            case "choice":
-                def box = new ComboBox<String>()
-                box.items.setAll(p.choices.collect { it.toString() })
-                box.maxWidth = Double.MAX_VALUE
-                if (p.default != null) box.value = p.default.toString() else if (!box.items.isEmpty()) box.value = box.items.first()
-                get = {
-                    def i = box.items.indexOf(box.value)
-                    i >= 0 ? p.choices[i] : null
-                }
-                set = { box.value = it.toString() }
-                node = box; controls[name] = box
-                if (p.widget == "radio" && !p.nullable) {        // Widget("radio"): radio buttons that drive the (hidden) combo box, so every other rule keeps working
-                    def group = new ToggleGroup()
-                    def buttons = box.items.collect { item ->
-                        def rb = new RadioButton(item)
-                        rb.toggleGroup = group
-                        rb.selected = item == box.value
-                        rb.onAction = { box.value = item }
-                        rb
-                    }
-                    box.valueProperty().addListener({ o, a, b -> buttons.each { it.selected = it.text == b } } as javafx.beans.value.ChangeListener)
-                    box.visible = false; box.managed = false
-                    node = new HBox(12, *buttons, box)
-                }
-                break
-            case "integer":
-                def lo = p.minimum != null ? (p.minimum as double).longValue() : -1000000000L
-                def hi = p.maximum != null ? (p.maximum as double).longValue() : 1000000000L
-                def initial = p.default != null ? (p.default as double).longValue() : Math.max(lo, Math.min(hi, 0L))
-                def spinner = new Spinner<Integer>(lo as int, hi as int, initial as int)
-                spinner.editable = true
-                commitOnFocusLost(spinner, p.label as String)
-                get = { spinner.value }; set = { spinner.valueFactory.value = (it as double).intValue() }
-                node = spinner; controls[name] = spinner
-                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {   // Widget("slider"): a slider beside the typed box, kept in step
-                    def slider = new Slider(lo, hi, initial)
-                    slider.maxWidth = Double.MAX_VALUE
-                    HBox.setHgrow(slider, Priority.ALWAYS)
-                    boolean syncing = false
-                    slider.valueProperty().addListener({ o, a, b ->
-                        if (syncing) return
-                        syncing = true
-                        try { spinner.valueFactory.value = Math.round(b as double) as int } finally { syncing = false }
-                    } as javafx.beans.value.ChangeListener)
-                    spinner.valueProperty().addListener({ o, a, b ->
-                        if (syncing || b == null) return
-                        syncing = true
-                        try { slider.value = (b as double) } finally { syncing = false }
-                    } as javafx.beans.value.ChangeListener)
-                    spinner.prefWidth = 110
-                    node = new HBox(8, slider, spinner)
-                }
-                break
-            case "float":
-                def lo = p.minimum != null ? p.minimum as double : -1e12d
-                def hi = p.maximum != null ? p.maximum as double : 1e12d
-                def initial = p.default != null ? p.default as double : Math.max(lo, Math.min(hi, 0d))
-                def step = (hi - lo) <= 100 && p.maximum != null ? (hi - lo) / 100 : 1d
-                def spinner = new Spinner<Double>(lo, hi, initial, step)
-                spinner.editable = true
-                commitOnFocusLost(spinner, p.label as String)
-                get = { spinner.value }; set = { spinner.valueFactory.value = it as double }
-                node = spinner; controls[name] = spinner
-                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {   // Widget("slider"): a slider beside the typed box, kept in step
-                    def slider = new Slider(lo, hi, initial)
-                    slider.maxWidth = Double.MAX_VALUE
-                    HBox.setHgrow(slider, Priority.ALWAYS)
-                    boolean syncing = false
-                    slider.valueProperty().addListener({ o, a, b ->
-                        if (syncing) return
-                        syncing = true
-                        try { spinner.valueFactory.value = (b as double) } finally { syncing = false }
-                    } as javafx.beans.value.ChangeListener)
-                    spinner.valueProperty().addListener({ o, a, b ->
-                        if (syncing || b == null) return
-                        syncing = true
-                        try { slider.value = (b as double) } finally { syncing = false }
-                    } as javafx.beans.value.ChangeListener)
-                    spinner.prefWidth = 110
-                    node = new HBox(8, slider, spinner)
-                }
-                break
+            case "boolean": built = booleanControl(p); break
+            case "choice": built = choiceControl(p); break
+            case "integer": built = integerControl(p); break
+            case "float": built = floatControl(p); break
             case "image":
-            case "labels":
-                def box = new ComboBox<String>()
-                def items = []
-                if (!p.required) items << NO_IMAGE
-                items.addAll(sources.keySet())
-                items << FILE_CHOICE
-                box.items.setAll(items)
-                box.maxWidth = Double.MAX_VALUE
-                def fileField = new TextField()
-                fileField.promptText = "or a file"
-                fileField.maxWidth = Double.MAX_VALUE
-                HBox.setHgrow(fileField, Priority.ALWAYS)
-                def browse = new Button("...")
-                browse.onAction = {
-                    def f = new FileChooser().showOpenDialog(stage)
-                    if (f != null) { fileField.text = f.absolutePath; box.value = FILE_CHOICE }
-                }
-                // sources first, but a tool that takes optional labels starts on "(none)"
-                box.value = p.required ? (sources ? sources.keySet().first() : FILE_CHOICE) : NO_IMAGE
-                imageBoxes[name] = box
-                def sourceMap = sources
-                def channelBox = p.pick_channel ? new ComboBox<String>() : null
-                if (channelBox != null) {                       // PickChannel: the channels (names) of the chosen image; the tool gets only the chosen one
-                    channelBox.maxWidth = Double.MAX_VALUE
-                    channelBoxes[name] = channelBox
-                    def refresh = {
-                        def names = []
-                        try {
-                            def server = box.value == FILE_CHOICE ? (fileField.text?.trim() ? ImageServers.buildServer(fileField.text.trim()) : null) : sourceMap[box.value]?.call()
-                            if (server != null) names = server.metadata.channels.collect { it.name as String }
-                        } catch (Exception e) {      // broad on purpose (a file chooser entry can fail in any reader): the channel list must never break the form
-                            LcLog.warn("channels of '" + name + "' could not be read", e)
-                            status?.text = "Channels of '" + p.label + "' could not be read: " + e.message
-                        }
-                        if (names.size() <= 1) LcLog.once("channels:" + currentTool?.id + ":" + name, "no channel chooser for '" + name + "' (the image has " + names.size() + " channel(s))")
-                        channelBox.items.setAll(names.size() > 1 ? names : [])
-                        channelBox.value = names.size() > 1 ? names.first() : null
-                        channelBox.visible = channelBox.managed = names.size() > 1
-                    }
-                    box.valueProperty().addListener({ o, a, b -> refresh() } as javafx.beans.value.ChangeListener)
-                    fileField.focusedProperty().addListener({ o, a, focused -> if (!focused) refresh() } as javafx.beans.value.ChangeListener)
-                    Platform.runLater { refresh() }
-                }
-                def selectionBox = p.region_of ? new CheckBox("use the selection") : null     // RegionOf: the selected annotations can be the value
-                if (selectionBox != null) {
-                    selectionBox.tooltip = new Tooltip("Send the selected annotations as the region (several are labels 1, 2, 3...)")
-                    selectionBox.selectedProperty().addListener({ o, a, on -> box.disable = on; fileField.disable = on } as javafx.beans.value.ChangeListener)
-                    selectionBoxes[name] = selectionBox
-                }
-                get = {
-                    if (selectionBox != null && selectionBox.selected) return [selection: true]
-                    def v = box.value
-                    if (v == NO_IMAGE) return null
-                    def channel = channelBox != null && channelBox.visible ? channelBox.items.indexOf(channelBox.value) : -1
-                    if (v == FILE_CHOICE) return fileField.text?.trim() ? [file: fileField.text.trim(), channel: channel] : null
-                    return [source: sourceMap[v], channel: channel]
-                }
-                set = { }
-                node = new HBox(6, box, fileField, browse)
-                if (selectionBox != null) node = new VBox(2, node, selectionBox)
-                if (channelBox != null) node = new VBox(2, node, new HBox(6, new Label("Channel"), channelBox))
-                HBox.setHgrow(box, Priority.SOMETIMES)
-                controls[name] = box
-                break
+            case "labels": built = imageControl(p, sources); break
             case "file":
             case "table":
-            case "folder":
-                def field = new TextField()
-                field.maxWidth = Double.MAX_VALUE
-                HBox.setHgrow(field, Priority.ALWAYS)
-                def browse = new Button("...")
-                browse.onAction = {
-                    def f = p.type == "folder" ? new DirectoryChooser().showDialog(stage) : new FileChooser().showOpenDialog(stage)
-                    if (f != null) field.text = f.absolutePath
-                }
-                get = { field.text?.trim() ? field.text.trim() : null }; set = { field.text = it as String }
-                node = new HBox(6, field, browse); controls[name] = field
-                break
-            default: // string
-                def field = new TextField(p.default != null ? p.default.toString() : "")
-                field.maxWidth = Double.MAX_VALUE
-                get = { field.text }; set = { field.text = it as String }
-                node = field; controls[name] = field
-                if (p.choices_from) {            // a dropdown where the source tool can answer, the text field where it cannot
-                    def combo = new ComboBox<String>()
-                    combo.maxWidth = Double.MAX_VALUE
-                    combo.visible = false; combo.managed = false
-                    combo.valueProperty().addListener({ o, a, b ->
-                        if (b == null) return
-                        field.text = b
-                        checks[name]?.selected = b != ""        // picking an option also sets an optional parameter
-                    } as javafx.beans.value.ChangeListener)
-                    choiceBoxes[name] = combo
-                    node = new VBox(2, field, combo)
-                }
+            case "folder": built = fileControl(p); break
+            default: built = stringControl(p)   // string
         }
+        Node node = built.node
+        Closure get = built.get, set = built.set
         if (p.nullable && !p.region_of) {      // optional without a default: unticked = the tool receives None (a region has its own 'use the selection' box)
             def check = new CheckBox("set")
             checks[name] = check
@@ -764,6 +613,200 @@ class LcDialog {
         }
         wrappers[name] = node
         return node
+    }
+
+    Map booleanControl(Map p) {
+        def box = new CheckBox()
+        box.selected = p.default == true
+        controls[p.name] = box
+        return [node: box, get: { box.selected }, set: { box.selected = it as boolean }]
+    }
+
+    Map choiceControl(Map p) {
+        def box = new ComboBox<String>()
+        box.items.setAll(p.choices.collect { it.toString() })
+        box.maxWidth = Double.MAX_VALUE
+        if (p.default != null) box.value = p.default.toString() else if (!box.items.isEmpty()) box.value = box.items.first()
+        controls[p.name] = box
+        Node node = box
+        if (p.widget == "radio" && !p.nullable) node = radioButtonsFor(box)     // Widget("radio")
+        return [node: node,
+                get: { def i = box.items.indexOf(box.value); i >= 0 ? p.choices[i] : null },
+                set: { box.value = it.toString() }]
+    }
+
+    /** Widget("radio"): radio buttons that drive the (hidden) combo box, so every other rule keeps working. */
+    Node radioButtonsFor(ComboBox<String> box) {
+        def group = new ToggleGroup()
+        def buttons = box.items.collect { item ->
+            def rb = new RadioButton(item)
+            rb.toggleGroup = group
+            rb.selected = item == box.value
+            rb.onAction = { box.value = item }
+            rb
+        }
+        box.valueProperty().addListener({ o, a, b -> buttons.each { it.selected = it.text == b } } as javafx.beans.value.ChangeListener)
+        box.visible = false; box.managed = false
+        return new HBox(12, *buttons, box)
+    }
+
+    Map integerControl(Map p) {
+        def lo = p.minimum != null ? (p.minimum as double).longValue() : -1000000000L
+        def hi = p.maximum != null ? (p.maximum as double).longValue() : 1000000000L
+        def initial = p.default != null ? (p.default as double).longValue() : Math.max(lo, Math.min(hi, 0L))
+        def spinner = new Spinner<Integer>(lo as int, hi as int, initial as int)
+        spinner.editable = true
+        commitOnFocusLost(spinner, p.label as String)
+        controls[p.name] = spinner
+        Node node = spinner
+        if (wantsSlider(p)) node = sliderBeside(spinner, lo, hi, initial) { double b -> spinner.valueFactory.value = Math.round(b) as int }
+        return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = (it as double).intValue() }]
+    }
+
+    Map floatControl(Map p) {
+        def lo = p.minimum != null ? p.minimum as double : -1e12d
+        def hi = p.maximum != null ? p.maximum as double : 1e12d
+        def initial = p.default != null ? p.default as double : Math.max(lo, Math.min(hi, 0d))
+        def step = (hi - lo) <= 100 && p.maximum != null ? (hi - lo) / 100 : 1d
+        def spinner = new Spinner<Double>(lo, hi, initial, step)
+        spinner.editable = true
+        commitOnFocusLost(spinner, p.label as String)
+        controls[p.name] = spinner
+        Node node = spinner
+        if (wantsSlider(p)) node = sliderBeside(spinner, lo, hi, initial) { double b -> spinner.valueFactory.value = b }
+        return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = it as double }]
+    }
+
+    static boolean wantsSlider(Map p) { p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null }
+
+    /** Widget("slider"): a slider beside the typed box, kept in step; `toSpinner` puts a slider position into the spinner. */
+    static Node sliderBeside(Spinner spinner, def lo, def hi, def initial, Closure toSpinner) {
+        def slider = new Slider(lo, hi, initial)
+        slider.maxWidth = Double.MAX_VALUE
+        HBox.setHgrow(slider, Priority.ALWAYS)
+        boolean syncing = false
+        slider.valueProperty().addListener({ o, a, b ->
+            if (syncing) return
+            syncing = true
+            try { toSpinner(b as double) } finally { syncing = false }
+        } as javafx.beans.value.ChangeListener)
+        spinner.valueProperty().addListener({ o, a, b ->
+            if (syncing || b == null) return
+            syncing = true
+            try { slider.value = (b as double) } finally { syncing = false }
+        } as javafx.beans.value.ChangeListener)
+        spinner.prefWidth = 110
+        return new HBox(8, slider, spinner)
+    }
+
+    /** An image or label parameter: a QuPath image or a file, optionally one channel of it, optionally the selected annotations (RegionOf). */
+    Map imageControl(Map p, Map sources) {
+        def name = p.name
+        def box = new ComboBox<String>()
+        def items = []
+        if (!p.required) items << NO_IMAGE
+        items.addAll(sources.keySet())
+        items << FILE_CHOICE
+        box.items.setAll(items)
+        box.maxWidth = Double.MAX_VALUE
+        def fileField = new TextField()
+        fileField.promptText = "or a file"
+        fileField.maxWidth = Double.MAX_VALUE
+        HBox.setHgrow(fileField, Priority.ALWAYS)
+        def browse = new Button("...")
+        browse.onAction = {
+            def f = new FileChooser().showOpenDialog(stage)
+            if (f != null) { fileField.text = f.absolutePath; box.value = FILE_CHOICE }
+        }
+        // sources first, but a tool that takes optional labels starts on "(none)"
+        box.value = p.required ? (sources ? sources.keySet().first() : FILE_CHOICE) : NO_IMAGE
+        imageBoxes[name] = box
+        def sourceMap = sources
+        def channelBox = p.pick_channel ? channelChooser(p, box, fileField, sourceMap) : null
+        def selectionBox = p.region_of ? regionSelectionBox(name, box, fileField) : null
+        Node node = new HBox(6, box, fileField, browse)
+        if (selectionBox != null) node = new VBox(2, node, selectionBox)
+        if (channelBox != null) node = new VBox(2, node, new HBox(6, new Label("Channel"), channelBox))
+        HBox.setHgrow(box, Priority.SOMETIMES)
+        controls[name] = box
+        return [node: node, set: { },
+                get: {
+                    if (selectionBox != null && selectionBox.selected) return [selection: true]
+                    def v = box.value
+                    if (v == NO_IMAGE) return null
+                    def channel = channelBox != null && channelBox.visible ? channelBox.items.indexOf(channelBox.value) : -1
+                    if (v == FILE_CHOICE) return fileField.text?.trim() ? [file: fileField.text.trim(), channel: channel] : null
+                    return [source: sourceMap[v], channel: channel]
+                }]
+    }
+
+    /** PickChannel: the channels (names) of the chosen image; the tool gets only the chosen one. */
+    ComboBox<String> channelChooser(Map p, ComboBox<String> box, TextField fileField, Map sourceMap) {
+        def name = p.name
+        def channelBox = new ComboBox<String>()
+        channelBox.maxWidth = Double.MAX_VALUE
+        channelBoxes[name] = channelBox
+        def refresh = {
+            def names = []
+            try {
+                def server = box.value == FILE_CHOICE ? (fileField.text?.trim() ? ImageServers.buildServer(fileField.text.trim()) : null) : sourceMap[box.value]?.call()
+                if (server != null) names = server.metadata.channels.collect { it.name as String }
+            } catch (Exception e) {      // broad on purpose (a file chooser entry can fail in any reader): the channel list must never break the form
+                LcLog.warn("channels of '" + name + "' could not be read", e)
+                status?.text = "Channels of '" + p.label + "' could not be read: " + e.message
+            }
+            if (names.size() <= 1) LcLog.once("channels:" + currentTool?.id + ":" + name, "no channel chooser for '" + name + "' (the image has " + names.size() + " channel(s))")
+            channelBox.items.setAll(names.size() > 1 ? names : [])
+            channelBox.value = names.size() > 1 ? names.first() : null
+            channelBox.visible = channelBox.managed = names.size() > 1
+        }
+        box.valueProperty().addListener({ o, a, b -> refresh() } as javafx.beans.value.ChangeListener)
+        fileField.focusedProperty().addListener({ o, a, focused -> if (!focused) refresh() } as javafx.beans.value.ChangeListener)
+        Platform.runLater { refresh() }
+        return channelBox
+    }
+
+    /** RegionOf: the selected annotations can be the value. */
+    CheckBox regionSelectionBox(String name, ComboBox<String> box, TextField fileField) {
+        def selectionBox = new CheckBox("use the selection")
+        selectionBox.tooltip = new Tooltip("Send the selected annotations as the region (several are labels 1, 2, 3...)")
+        selectionBox.selectedProperty().addListener({ o, a, on -> box.disable = on; fileField.disable = on } as javafx.beans.value.ChangeListener)
+        selectionBoxes[name] = selectionBox
+        return selectionBox
+    }
+
+    Map fileControl(Map p) {
+        def field = new TextField()
+        field.maxWidth = Double.MAX_VALUE
+        HBox.setHgrow(field, Priority.ALWAYS)
+        def browse = new Button("...")
+        browse.onAction = {
+            def f = p.type == "folder" ? new DirectoryChooser().showDialog(stage) : new FileChooser().showOpenDialog(stage)
+            if (f != null) field.text = f.absolutePath
+        }
+        controls[p.name] = field
+        return [node: new HBox(6, field, browse), get: { field.text?.trim() ? field.text.trim() : null }, set: { field.text = it as String }]
+    }
+
+    Map stringControl(Map p) {
+        def name = p.name
+        def field = new TextField(p.default != null ? p.default.toString() : "")
+        field.maxWidth = Double.MAX_VALUE
+        controls[name] = field
+        Node node = field
+        if (p.choices_from) {            // a dropdown where the source tool can answer, the text field where it cannot
+            def combo = new ComboBox<String>()
+            combo.maxWidth = Double.MAX_VALUE
+            combo.visible = false; combo.managed = false
+            combo.valueProperty().addListener({ o, a, b ->
+                if (b == null) return
+                field.text = b
+                checks[name]?.selected = b != ""        // picking an option also sets an optional parameter
+            } as javafx.beans.value.ChangeListener)
+            choiceBoxes[name] = combo
+            node = new VBox(2, field, combo)
+        }
+        return [node: node, get: { field.text }, set: { field.text = it as String }]
     }
 
     void commitOnFocusLost(Spinner spinner, String label = null) {
@@ -816,7 +859,7 @@ class LcDialog {
         }
     }
 
-    // ---- Copy as command (same text as labconstrictor_tools.command)
+    // ---- copy as command (same text as labconstrictor_tools.command)
     static final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
     static String shellQuote(String text, boolean windows) {
@@ -833,51 +876,59 @@ class LcDialog {
                 LcLog.warn("command line: could not read '" + p.name + "' (left out)", e)
                 notes << ("# " + p.name + ": the value could not be read (" + e.message + "); it is left out")
             }
-            if (p.type in ["image", "labels"]) {
-                def path = null
-                if (v instanceof Map && v.selection) {
-                    path = "region.tif"
-                    notes << ("# " + p.name + ": the selection cannot be copied; save it as a label image and put its path here")
-                } else if (v instanceof Map) {
-                    if (v.file) path = v.file as String
-                    else if (v.source != null) {
-                        try {
-                            def uri = v.source.call().getURIs()?.find { it.scheme == "file" }
-                            if (uri != null) path = new File(uri).path
-                        } catch (Exception e) {      // broad on purpose: the image getter is QuPath's; the command still gets a placeholder
-                            LcLog.warn("command line: no file for the image of '" + p.name + "'", e)
-                            notes << ("# " + p.name + ": the image file could not be determined (" + e.message + ")")
-                        }
-                    }
-                    if (p.pick_channel && v.channel != null && v.channel >= 0) notes << ("# " + p.name + ": QuPath sent only channel " + (v.channel + 1) + "; the command sends the whole file")
-                }
-                v = path
-            }
+            if (p.type in ["image", "labels"]) v = commandImagePath(p, v, notes)
             if (v != null) values[p.name] = v
             if (p.type in FILE_PLACEHOLDERS.keySet() && p.required && values[p.name] == null) { values[p.name] = FILE_PLACEHOLDERS[p.type]; missing << p.name }
         }
         return [values: values, missing: missing, notes: notes]
     }
 
+    /** The file a command line names for an image value: the file typed, or the file behind a QuPath image; null (with a note) when there is none. */
+    String commandImagePath(Map p, def v, List notes) {
+        String path = null
+        if (v instanceof Map && v.selection) {
+            path = "region.tif"
+            notes << ("# " + p.name + ": the selection cannot be copied; save it as a label image and put its path here")
+        } else if (v instanceof Map) {
+            if (v.file) path = v.file as String
+            else if (v.source != null) {
+                try {
+                    def uri = v.source.call().getURIs()?.find { it.scheme == "file" }
+                    if (uri != null) path = new File(uri).path
+                } catch (Exception e) {      // broad on purpose: the image getter is QuPath's; the command still gets a placeholder
+                    LcLog.warn("command line: no file for the image of '" + p.name + "'", e)
+                    notes << ("# " + p.name + ": the image file could not be determined (" + e.message + ")")
+                }
+            }
+            if (p.pick_channel && v.channel != null && v.channel >= 0) notes << ("# " + p.name + ": QuPath sent only channel " + (v.channel + 1) + "; the command sends the whole file")
+        }
+        return path
+    }
+
     String commandText(String kind) {
         def built = commandValues()
-        def app = apps[appBox.value]
         def head = (built.missing ? ["# replace the file for: " + built.missing.join(", ")] : []) + built.notes
         def note = head ? head.join("\n") + "\n" : ""
         def given = currentTool.inputs.findAll { built.values.containsKey(it.name) }
-        if (kind == "python") {
-            def literal = { v -> v instanceof Boolean ? (v ? "True" : "False") : v instanceof Number ? v.toString() : "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'" }
-            def body = given ? "{\n" + given.collect { "    '" + it.name + "': " + literal(built.values[it.name]) + "," }.join("\n") + "\n}" : "{}"
-            return note + "from labconstrictor_tools import client\n\ntask = client.run_once('" + appBox.value + "', '" + currentTool.id + "', " + body + ")\n" +
-                   'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
-        }
+        return note + (kind == "python" ? pythonSnippet(given, built.values) : terminalCommand(given, built.values))
+    }
+
+    String pythonSnippet(List given, Map values) {
+        def literal = { v -> v instanceof Boolean ? (v ? "True" : "False") : v instanceof Number ? v.toString() : "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'" }
+        def body = given ? "{\n" + given.collect { "    '" + it.name + "': " + literal(values[it.name]) + "," }.join("\n") + "\n}" : "{}"
+        return "from labconstrictor_tools import client\n\ntask = client.run_once('" + appBox.value + "', '" + currentTool.id + "', " + body + ")\n" +
+               'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
+    }
+
+    String terminalCommand(List given, Map values) {
+        def app = apps[appBox.value]
         boolean windows = System.getProperty("os.name").toLowerCase().contains("win")
         def parts = [app.entry.python as String, "-m", "labconstrictor_tools", "run", appBox.value as String, currentTool.id as String].collect { shellQuote(it, windows) }
         given.each { p ->
-            def v = built.values[p.name]
+            def v = values[p.name]
             parts << shellQuote(p.name + "=" + (v instanceof Boolean ? (v ? "true" : "false") : v.toString()), windows)
         }
-        return note + parts.join(" ")
+        return parts.join(" ")
     }
 
     String copyAsCommand(String kind) {
@@ -891,22 +942,34 @@ class LcDialog {
         return text
     }
 
-    // ---- running
-    void run() {
-        if (running || currentTool == null) return
-        def toolId = currentTool.id as String
-        def app = apps[appBox.value]
+    // ---- the request: what the form asks for
+    /** The values of the form in the tool's order, or null (with the reason in the status line) when one cannot be read or a required one is missing. */
+    Map readFormValues() {
         def values = new LinkedHashMap()
         for (p in currentTool.inputs) {
             def v
-            try { v = getters[p.name]() } catch (Exception e) { LcLog.warn("could not read '" + p.name + "'", e); status.text = "Check '" + p.label + "': " + e.message; return }
+            try { v = getters[p.name]() } catch (Exception e) { LcLog.warn("could not read '" + p.name + "'", e); status.text = "Check '" + p.label + "': " + e.message; return null }
             if (v == null) {
-                if (p.required && !p.nullable && p.type in ["image", "labels", "table", "file", "folder", "string"]) { status.text = "'" + p.label + "' is required."; return }
+                if (p.required && !p.nullable && p.type in ["image", "labels", "table", "file", "folder", "string"]) { status.text = "'" + p.label + "' is required."; return null }
                 continue
             }
             values[p.name] = v
         }
+        return values
+    }
+
+    // ---- running
+    void run() {
+        if (running || currentTool == null) return
+        def values = readFormValues()
+        if (values == null) return
         imageChoiceAtRun = imageBoxes.collectEntries { k, b -> [(k): b.value as String] }
+        showRunning()
+        runInBackground(values)
+    }
+
+    /** The form goes busy: Run off, Cancel on, an indeterminate progress bar. */
+    void showRunning() {
         messageLabel.visible = false; messageLabel.managed = false
         running = true
         runButton.disable = true
@@ -914,35 +977,61 @@ class LcDialog {
         detailsButton.disable = true
         progress.progress = ProgressBar.INDETERMINATE_PROGRESS
         status.text = "starting..."
+    }
+
+    /** The form is free again after a run. */
+    void showIdle() {
+        running = false
+        runButton.disable = false
+        cancelButton.disable = true
+        detailsButton.disable = false
+        progress.progress = 0
+    }
+
+    /** The worker is started (or replaced) when there is none for this app, or it has died. */
+    void ensureWorker(Map app, String appName) {
+        if (worker == null || workerApp != appName || worker.closed || !worker.proc.isAlive()) {
+            stopWorker(false)
+            worker = new LcWorker(app.entry)
+            workerApp = appName
+        }
+    }
+
+    void runInBackground(Map values) {
+        def toolId = currentTool.id as String
+        def app = apps[appBox.value]
         def appName = appBox.value
         def toolLabel = currentTool.label
+        def toolInputs = currentTool.inputs
         Thread.start("lc-run") {
             def t0 = System.nanoTime()
-            Map outcome
-            def tmp = Files.createTempDirectory("lcqupath_").toFile()
-            try {
-                def inputs = prepareInputs(values, currentTool.inputs, tmp, appName, toolId)
-                if (worker == null || workerApp != appName || worker.closed || !worker.proc.isAlive()) {
-                    stopWorker(false)
-                    worker = new LcWorker(app.entry)
-                    workerApp = appName
-                }
-                outcome = worker.run(toolId, inputs) { message, current, maximum ->
-                    Platform.runLater {
-                        status.text = message
-                        progress.progress = (current != null && maximum) ? (current as double) / (maximum as double) : ProgressBar.INDETERMINATE_PROGRESS
-                    }
-                }
-            } catch (Exception e) {
-                // broad on purpose (isolation boundary of the run thread): any failure becomes the outcome the person reads (status line and Details, with the stack trace)
-                LcLog.warn("run of '" + toolId + "' failed on the host", e)
-                outcome = [responseType: "FAILURE", error: e.class.simpleName + ": " + e.message, code: "host_error", trace: LcLog.trace(e)]
-            } finally {
-                LcLog.deleteTemp(tmp)
-            }
+            Map outcome = runOnWorker(app, appName, toolId, toolInputs, values)
             def seconds = (System.nanoTime() - t0) / 1e9
             Platform.runLater { finish(appName, toolLabel, outcome, seconds) }
         }
+    }
+
+    /** One run on the worker thread; every failure becomes the outcome the person reads. */
+    Map runOnWorker(Map app, String appName, String toolId, List toolInputs, Map values) {
+        Map outcome
+        def tmp = Files.createTempDirectory("lcqupath_").toFile()
+        try {
+            def inputs = prepareInputs(values, toolInputs, tmp, appName, toolId)
+            ensureWorker(app, appName)
+            outcome = worker.run(toolId, inputs) { message, current, maximum ->
+                Platform.runLater {
+                    status.text = message
+                    progress.progress = (current != null && maximum) ? (current as double) / (maximum as double) : ProgressBar.INDETERMINATE_PROGRESS
+                }
+            }
+        } catch (Exception e) {
+            // broad on purpose (isolation boundary of the run thread): any failure becomes the outcome the person reads (status line and Details, with the stack trace)
+            LcLog.warn("run of '" + toolId + "' failed on the host", e)
+            outcome = [responseType: "FAILURE", error: e.class.simpleName + ": " + e.message, code: "host_error", trace: LcLog.trace(e)]
+        } finally {
+            LcLog.deleteTemp(tmp)
+        }
+        return outcome
     }
 
     static final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
@@ -963,6 +1052,15 @@ class LcDialog {
         int w = server.width, h = server.height
         if ((long) w * h > MAX_REGION_PIXELS)
             throw new IllegalStateException("'" + label + "': the image has " + (long) w * h + " pixels; a selection region is supported up to " + MAX_REGION_PIXELS + " (use a smaller image or a file)")
+        def mask = paintLabelMask(selected, w, h)
+        if (mask == null) throw new IllegalStateException("'" + label + "': the selected annotations cover no pixel of the image")
+        def out = new File(tmp, p.name + ".tif")
+        ImageWriterTools.writeImage(mask, out.absolutePath)
+        return out
+    }
+
+    /** The objects painted as a 16-bit label image (object i has label i + 1), or null when none covers a pixel. */
+    static BufferedImage paintLabelMask(Collection selected, int w, int h) {
         def painted = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)       // each object painted in the colour of its number (no anti-aliasing: pixel centres decide)
         def g = painted.createGraphics()
         try {
@@ -975,52 +1073,53 @@ class LcDialog {
             int objectNumber = painted.getRGB(x, y) & 0xFFFFFF
             if (objectNumber != 0) { raster.setSample(x, y, 0, objectNumber); any = true }
         }
-        if (!any) throw new IllegalStateException("'" + label + "': the selected annotations cover no pixel of the image")
-        def out = new File(tmp, p.name + ".tif")
-        ImageWriterTools.writeImage(mask, out.absolutePath)
-        return out
+        return any ? mask : null
     }
 
     Map prepareInputs(Map values, List params, File tmp, String appName, String toolId) {
         def inputs = new LinkedHashMap()
-        values.each { name, v ->
-            def p = params.find { it.name == name }
-            if (p.type in ["image", "labels"] && v instanceof Map && v.selection) {
-                inputs[name] = selectionMask(p, tmp, appName).absolutePath          // RegionOf: the selected annotations
-            } else if (p.type in ["image", "labels"]) {
-                if (v.file && !(p.pick_channel && v.channel != null && v.channel >= 0)) {
-                    def f = new File(v.file as String)
-                    if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
-                    inputs[name] = f.absolutePath
-                } else {
-                    def server
-                    if (v.file) {
-                        def f = new File(v.file as String)
-                        if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
-                        server = ImageServers.buildServer(f.absolutePath)
-                    } else server = v.source.call()
-                    if (p.pick_channel && v.channel != null && v.channel >= 0 && server.nChannels() > 1)       // PickChannel: only the chosen channel is exported
-                        server = new TransformedServerBuilder(server).extractChannels(v.channel as int).build()
-                    def out = new File(tmp, name + ".tif")
-                    ImageWriterTools.writeImageRegion(server, RegionRequest.createInstance(server), out.absolutePath)
-                    inputs[name] = out.absolutePath
-                }
-            } else if (p.type in ["file", "table", "folder"]) {
-                def f = new File(v as String)
-                if (!f.exists()) throw new FileNotFoundException("file not found: " + f)
-                inputs[name] = f.absolutePath
-            } else {
-                inputs[name] = v
-            }
+        values.each { name, v -> inputs[name] = prepareInput(params.find { it.name == name }, name as String, v, tmp, appName) }
+        inputs["_job_dir"] = newJobDir(appName, toolId).absolutePath
+        return inputs
+    }
+
+    /** What the tool receives for one value: images are exported (or the file's path is passed), files are checked, the rest passes unchanged. */
+    Object prepareInput(Map p, String name, Object v, File tmp, String appName) {
+        if (p.type in ["image", "labels"]) return prepareImageInput(p, name, v, tmp, appName)
+        if (p.type in ["file", "table", "folder"]) {
+            def f = new File(v as String)
+            if (!f.exists()) throw new FileNotFoundException("file not found: " + f)
+            return f.absolutePath
         }
-        // results go to a host-owned folder next to the ones the command line makes (the newest 20 are kept)
+        return v
+    }
+
+    String prepareImageInput(Map p, String name, Map v, File tmp, String appName) {
+        if (v.selection) return selectionMask(p, tmp, appName).absolutePath          // RegionOf: the selected annotations
+        boolean oneChannel = p.pick_channel && v.channel != null && v.channel >= 0
+        if (v.file && !oneChannel) return existingFile(v.file as String).absolutePath
+        def server = v.file ? ImageServers.buildServer(existingFile(v.file as String).absolutePath) : v.source.call()
+        if (oneChannel && server.nChannels() > 1)       // PickChannel: only the chosen channel is exported
+            server = new TransformedServerBuilder(server).extractChannels(v.channel as int).build()
+        def out = new File(tmp, name + ".tif")
+        ImageWriterTools.writeImageRegion(server, RegionRequest.createInstance(server), out.absolutePath)
+        return out.absolutePath
+    }
+
+    static File existingFile(String path) {
+        def f = new File(path)
+        if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
+        return f
+    }
+
+    /** Results go to a host-owned folder next to the ones the command line makes (the newest 20 are kept). */
+    static File newJobDir(String appName, String toolId) {
         def root = new File(LcRegistry.searchPath().first().parentFile, "results")
         def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss").format(new Date())
         def job = new File(root, stamp + "_" + System.nanoTime().toString().takeRight(6) + "_" + appName + "_" + toolId)
         job.mkdirs()
         (root.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: []).sort { it.name }.reverse().drop(20).each { it.deleteDir() }
-        inputs["_job_dir"] = job.absolutePath
-        return inputs
+        return job
     }
 
     void cancel() {
@@ -1028,40 +1127,46 @@ class LcDialog {
         worker?.cancel()
     }
 
+    // ---- results
     void finish(String appName, String toolLabel, Map outcome, double seconds) {
-        running = false
-        runButton.disable = false
-        cancelButton.disable = true
-        detailsButton.disable = false
-        progress.progress = 0
+        showIdle()
         def type = outcome.responseType
         lastReport = LcJson.pretty(outcome) + "\n\nworker output:\n" + (worker?.stderrText() ?: "")
         if (type == "COMPLETION") {
-            def results = outcome.outputs?.results ?: []
-            def summary = results.findAll { it.type == "values" }.collect { r -> r.values.collect { k, v -> k + "=" + show(v) }.join(", ") }.join("; ")
-            status.text = "done in " + String.format("%.1f", seconds) + "s  " + summary
-            showResults(appName, toolLabel, results)
-            clearAfterRun()
-            scheduleChoices(200)          // a run may change what a source tool answers (e.g. a game was prepared)
+            finishCompleted(appName, toolLabel, outcome, seconds)
         } else if (type == "CANCELATION") {
             status.text = "cancelled"
         } else if (type == "CRASH") {
             status.text = "the worker stopped: " + outcome.error
             stopWorker(true)
         } else {
-            def code = outcome.code
-            def error = outcome.error as String
-            if (code in ["no_match", "no_result"]) {
-                status.text = "no result: " + error.replaceFirst(/^\[[^\]]*\]\s*/, "")
-                def a = new Alert(Alert.AlertType.INFORMATION, error.replaceFirst(/^\[[^\]]*\]\s*/, ""), ButtonType.OK)
-                a.headerText = toolLabel + ": nothing found"
-                a.initOwner(stage)
-                a.show()
-            } else {
-                status.text = "failed: " + error
-            }
+            finishFailed(toolLabel, outcome)
         }
         if (!keepWorker.selected) stopWorker(false)
+    }
+
+    void finishCompleted(String appName, String toolLabel, Map outcome, double seconds) {
+        def results = outcome.outputs?.results ?: []
+        def summary = results.findAll { it.type == "values" }.collect { r -> r.values.collect { k, v -> k + "=" + show(v) }.join(", ") }.join("; ")
+        status.text = "done in " + String.format("%.1f", seconds) + "s  " + summary
+        showResults(appName, toolLabel, results)
+        clearAfterRun()
+        scheduleChoices(200)          // a run may change what a source tool answers (e.g. a game was prepared)
+    }
+
+    /** A "no match" outcome is an answer (shown in a small dialog); any other failure goes to the status line. */
+    void finishFailed(String toolLabel, Map outcome) {
+        def code = outcome.code
+        def error = outcome.error as String
+        if (code in ["no_match", "no_result"]) {
+            status.text = "no result: " + error.replaceFirst(/^\[[^\]]*\]\s*/, "")
+            def a = new Alert(Alert.AlertType.INFORMATION, error.replaceFirst(/^\[[^\]]*\]\s*/, ""), ButtonType.OK)
+            a.headerText = toolLabel + ": nothing found"
+            a.initOwner(stage)
+            a.show()
+        } else {
+            status.text = "failed: " + error
+        }
     }
 
     void stopWorker(boolean force) {
@@ -1081,55 +1186,70 @@ class LcDialog {
         s.show()
     }
 
-    // ---- results
     void showResults(String appName, String toolLabel, List results) {
         def box = new VBox(10)
         box.padding = new Insets(10)
-        for (r in results) {
-            switch (r.type) {
-                case "values":
-                    def grid = newGrid()
-                    int row = 0
-                    r.values.each { k, v -> grid.add(new Label(k.toString()), 0, row); def l = new Label(show(v)); l.wrapText = true; grid.add(l, 1, row++) }
-                    box.children.addAll(boldLabel(r.name ?: "values"), grid)
-                    break
-                case "message":
-                    def text = (r.text as String).replaceAll(/\*\*(.+?)\*\*/, '$1')
-                    messageLabel.text = (messageLabel.text && messageLabel.visible ? messageLabel.text + "\n\n" : "") + text
-                    messageLabel.visible = true; messageLabel.managed = true
-                    break
-                case "points":
-                    box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String))
-                    break
-                case "shapes":
-                    box.children.addAll(boldLabel((r.name ?: "shapes") + " (outlines)"), wrapped(placeShapes(appName, r)))
-                    break
-                case ["image", "labels"]:
-                    def open = new Button("Open in QuPath")
-                    def path = r.path as String
-                    try { box.children.add(previewNode(path, r.type == "labels")) } catch (Exception e) { LcLog.warn("no preview for " + path, e); box.children.add(new Label("(no preview: " + e.message + ")")) }
-                    open.onAction = {
-                        try { qupath.openImage(qupath.viewer, path, false, false) } catch (Exception e) { LcLog.warn("cannot open " + path, e); status.text = "cannot open: " + e.message }
-                    }
-                    def l = new Label(path); l.wrapText = true
-                    box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ", axes " + (r.axes ?: "?") + ")"), l, open)
-                    break
-                case "table":
-                    box.children.addAll(boldLabel(r.name ?: "table"), tableView(r.path as String))
-                    break
-                case "affine":
-                    def m = r.matrix_yx
-                    def txt = (m instanceof List) ? m.collect { row -> row.collect { String.format("%.5f", it as double) }.join("   ") }.join("\n") : m.toString()
-                    def l = new Label(txt); l.style = "-fx-font-family: monospace"
-                    box.children.addAll(boldLabel((r.name ?: "alignment") + ": " + (r.apply_to ?: "") + " relative to " + (r.relative_to ?: "")), l)
-                    break
-                default:
-                    box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ")"), new Label((r.path ?: r.toString()) as String))
-            }
+        for (r in results) addResult(box, appName, r)
+        showResultWindow(box, appName, toolLabel)
+    }
+
+    /** One output of the tool becomes its part of the results window (a "message" goes to the form instead). */
+    void addResult(VBox box, String appName, Map r) {
+        switch (r.type) {
+            case "values": box.children.addAll(valuesSection(r)); break
+            case "message":
+                def text = (r.text as String).replaceAll(/\*\*(.+?)\*\*/, '$1')
+                messageLabel.text = (messageLabel.text && messageLabel.visible ? messageLabel.text + "\n\n" : "") + text
+                messageLabel.visible = true; messageLabel.managed = true
+                break
+            case "points":
+                box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String))
+                break
+            case "shapes":
+                box.children.addAll(boldLabel((r.name ?: "shapes") + " (outlines)"), wrapped(placeShapes(appName, r)))
+                break
+            case ["image", "labels"]: box.children.addAll(imageSection(r)); break
+            case "table":
+                box.children.addAll(boldLabel(r.name ?: "table"), tableView(r.path as String))
+                break
+            case "affine": box.children.addAll(affineSection(r)); break
+            default:
+                box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ")"), new Label((r.path ?: r.toString()) as String))
         }
+    }
+
+    List<Node> valuesSection(Map r) {
+        def grid = newGrid()
+        int row = 0
+        r.values.each { k, v -> grid.add(new Label(k.toString()), 0, row); def l = new Label(show(v)); l.wrapText = true; grid.add(l, 1, row++) }
+        return [boldLabel(r.name ?: "values"), grid]
+    }
+
+    List<Node> imageSection(Map r) {
+        def nodes = []
+        def open = new Button("Open in QuPath")
+        def path = r.path as String
+        try { nodes.add(previewNode(path, r.type == "labels")) } catch (Exception e) { LcLog.warn("no preview for " + path, e); nodes.add(new Label("(no preview: " + e.message + ")")) }
+        open.onAction = {
+            try { qupath.openImage(qupath.viewer, path, false, false) } catch (Exception e) { LcLog.warn("cannot open " + path, e); status.text = "cannot open: " + e.message }
+        }
+        def l = new Label(path); l.wrapText = true
+        nodes.addAll([boldLabel((r.name ?: r.type) + " (" + r.type + ", axes " + (r.axes ?: "?") + ")"), l, open])
+        return nodes
+    }
+
+    static List<Node> affineSection(Map r) {
+        def m = r.matrix_yx
+        def txt = (m instanceof List) ? m.collect { row -> row.collect { String.format("%.5f", it as double) }.join("   ") }.join("\n") : m.toString()
+        def l = new Label(txt); l.style = "-fx-font-family: monospace"
+        return [boldLabel((r.name ?: "alignment") + ": " + (r.apply_to ?: "") + " relative to " + (r.relative_to ?: "")), l]
+    }
+
+    /** Replace(): the next run's results take the place of the last ones in the same window. */
+    void showResultWindow(VBox box, String appName, String toolLabel) {
         def key = appName + "/" + toolLabel
         def replacing = currentTool?.outputs?.any { it.replace } && resultWindows[key]?.showing
-        def stage2 = replacing ? resultWindows[key] : new Stage()     // Replace(): the next run's results take the place of the last ones
+        def stage2 = replacing ? resultWindows[key] : new Stage()
         stage2.title = appName + ": " + toolLabel
         if (!replacing) stage2.initOwner(stage)
         def sc = new ScrollPane(box)
@@ -1141,12 +1261,18 @@ class LcDialog {
     }
     Stage lastResultStage
 
-    /** Points go on the image they were found in when that was the image open in QuPath; otherwise only the table is shown. */
-    String placePoints(String appName, Map r) {
+    /** The image open in QuPath when an output's results were found in it (the image parameter was "Current image" for this run); otherwise null. */
+    def openImageFor(Map r) {
         def data = qupath?.imageData
         def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
         def chosen = target ? imageChoiceAtRun[target] : null
-        if (data == null || chosen == null || !chosen.startsWith("Current image"))
+        return (data == null || chosen == null || !chosen.startsWith("Current image")) ? null : data
+    }
+
+    /** Points go on the image they were found in when that was the image open in QuPath; otherwise only the table is shown. */
+    String placePoints(String appName, Map r) {
+        def data = openImageFor(r)
+        if (data == null)
         {
             LcLog.once("points-not-placed:" + appName + ":" + r.name, "points '" + r.name + "' not placed: they were not found in the image open in QuPath (table only)")
             return "Not placed on an image (the points were not found in the image open in QuPath)."
@@ -1178,19 +1304,34 @@ class LcDialog {
      *  on the image they were found in (when that was the image open in QuPath); holes and parts are kept; numeric properties become
      *  measurements. Replace() removes the previous annotations of this output. */
     String placeShapes(String appName, Map r) {
-        def data = qupath?.imageData
-        def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
-        def chosen = target ? imageChoiceAtRun[target] : null
-        if (data == null || chosen == null || !chosen.startsWith("Current image"))
+        def data = openImageFor(r)
+        if (data == null)
         {
             LcLog.once("shapes-not-placed:" + appName + ":" + r.name, "outlines '" + r.name + "' not placed: they were not found in the image open in QuPath")
             return "Not placed on an image (the outlines were not found in the image open in QuPath)."
         }
         def collection = new Gson().fromJson(new File(r.path as String).getText("UTF-8"), Map)
+        def prefix = appName + ":" + r.name
+        def built = shapeAnnotations(collection, prefix)
+        def objects = built.objects, holes = built.holes, total = collection.features.size()
+        def hierarchy = data.hierarchy
+        def replacing = currentTool.outputs.any { it.name == r.name && it.replace }
+        if (replacing) {
+            def previous = hierarchy.annotationObjects.findAll { it.name?.startsWith(prefix + " ") }
+            if (previous) hierarchy.removeObjects(previous, true)       // Replace()
+        }
+        hierarchy.addObjects(objects)
+        def text = objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>'."
+        if (total > MAX_SHAPES) text += " Showing the first " + MAX_SHAPES + " of " + total + "."
+        if (holes) text += " " + holes + " outline(s) have holes (kept)."
+        return text
+    }
+
+    /** One annotation per GeoJSON feature (at most MAX_SHAPES), and the number of polygon parts that have holes. */
+    Map shapeAnnotations(Map collection, String prefix) {
         def factory = new org.locationtech.jts.geom.GeometryFactory()
         def ring = { List points -> factory.createLinearRing(points.collect { new org.locationtech.jts.geom.Coordinate((it[0] as double) + 0.5d, (it[1] as double) + 0.5d) } as org.locationtech.jts.geom.Coordinate[]) }   // pixel centres
-        def prefix = appName + ":" + r.name
-        def objects = [], holes = 0, total = collection.features.size()
+        def objects = [], holes = 0
         for (feature in collection.features) {
             if (objects.size() >= MAX_SHAPES) break
             def geometry = feature.geometry
@@ -1207,17 +1348,7 @@ class LcDialog {
             feature.get("properties")?.each { k, v -> if (v instanceof Number) obj.measurementList.put(k.toString(), v as double) }   // numeric properties become measurements
             objects << obj
         }
-        def hierarchy = data.hierarchy
-        def replacing = currentTool.outputs.any { it.name == r.name && it.replace }
-        if (replacing) {
-            def previous = hierarchy.annotationObjects.findAll { it.name?.startsWith(prefix + " ") }
-            if (previous) hierarchy.removeObjects(previous, true)       // Replace()
-        }
-        hierarchy.addObjects(objects)
-        def text = objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>'."
-        if (total > MAX_SHAPES) text += " Showing the first " + MAX_SHAPES + " of " + total + "."
-        if (holes) text += " " + holes + " outline(s) have holes (kept)."
-        return text
+        return [objects: objects, holes: holes]
     }
 
     /** A small preview of a result image (first plane, first channel, scaled to the window); labels get a colour per label. */
