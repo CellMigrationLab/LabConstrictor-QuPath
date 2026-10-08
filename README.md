@@ -15,7 +15,7 @@ Without the jar: open `src/main/resources/org/cellmigrationlab/labconstrictor/qu
 ## What it does
 * Pick an app and a tool. Numbers (range, unit), choices, checkboxes, text, files and folders become fields; parameters of a group sit under a heading, advanced ones in a collapsed section, optional ones without a default have a "set" box (unticked = the tool gets nothing), and `enabled_when` greys fields out.
 * **Image inputs**: the image open in QuPath, any image of the open project, or a file. QuPath's image is exported losslessly as TIFF (the whole image, or the part chosen under **Image area**, see below). The pixel size of the chosen image fills the tool's pixel-size field (micrometres).
-* Results open in a window: values, tables (as a table), images (a preview, the path and an "Open in QuPath" button), alignment matrices, files, messages (also shown under the status line) and points.
+* Results open in a window: values, tables (as a table: the first 100 000 rows, then "table 'name' (N rows, first M shown; the full table is in P)", the Napari wording; cells with commas, quotes and line breaks are read as CSV says), images (a preview, the path and an "Open in QuPath" button), alignment matrices, files, messages (also shown under the status line) and points.
 * **Interaction hints** of the manifest: a `choices_from` parameter is a dropdown filled by another tool of the app (a text field when that tool cannot answer), `clear_after_run` parameters are reset after a successful run, a `Collapsed` group is a folded section, and an output with `Replace()` reuses the results window of the tool instead of opening a new one.
 * **Channel selector**: an image input declared with `PickChannel()` gets a Channel chooser (the channel names of the chosen image, or of a file); the tool receives only that channel.
 * **Points** found in the image that is open in QuPath become a point annotation named `<app>:<output>` (replaced by the next run when the output declares `Replace()`); points of any other image are shown as a table.
@@ -29,6 +29,10 @@ Every image or labels input that uses the image open in QuPath ("Current image: 
 * **Whole image** (default): as before.
 * **Selected annotation(s)**: the bounding box of the selected annotations (points do not count), widened to whole pixels and clamped to the image; z and t are those of the viewer.
 * **Current viewport**: the bounds of the region the viewer shows, clamped to the image.
+
+**Stacks and 2D tools.** A tool that declares its axes (`Axes("YX")`) is not given a stack by chance: an image with several z-planes or time points that would be sent whole is refused with the Tools sentence first, `'Image' must be a 2D image (YX) but got 3D with shape (3, 60, 80)`, then the way out ("Choose 'Image area: Current viewport' to send the plane on screen, or use a 2D image"). This is the same refusal (`wrong_dimensions`) the other hosts give; a multi-channel image is refused by the worker with the same sentence. Intended difference: choosing an Image area (selection or viewport) names the plane, the z and t of the viewer, so that run goes through; the durable fix (a `PickPlane` hint) is in the Tools Wave 2 spec.
+
+**Refusals read as the sentence alone.** A refusal the host makes before any tool starts (no selection, no viewer, an area outside the image, a stack for a 2D tool, a region too big) shows the sentence in the status line with no `failed:` and no class name, like Napari and Fiji; it is logged without a stack trace. (The size guard and the missing-file checks still say `failed: ...`: see the parity report, QP-2.)
 
 A project image or a file is always sent whole (the chooser is disabled and its tooltip says why). A missing selection or viewer is reported, never guessed around.
 
@@ -69,6 +73,10 @@ Each of these is deliberate and is written once to QuPath's log (logger `labcons
 `BODY=gui_test_area_body.groovy tests/run_gui_test.sh` checks the Image area and the size guard against the `interactions` example app and the blobs fixture (guard at and one pixel over the budget, the exported area equals the server region, outlines and points land at the blobs' full-image coordinates, the viewport area, RegionOf over an area, differing areas refused, Copy as command note; 48 checks).
 
 `BODY=gui_test_parity_trust_body.groovy LC_HOME=<an empty scratch folder named lhome_trust> tests/run_gui_test.sh` writes registry entries that break each trust check and checks that each one is refused with its reason and that a good entry loads (26 checks; needs root to test the owner check).
+
+`BODY=gui_test_parity_messages_body.groovy tests/run_gui_test.sh` opens a 3-plane TIFF (written with tifffile from `/home/tester/v-napari`) and checks that a refusal is the sentence alone, that a z-stack is refused for a `YX` tool with the Tools sentence and the way out, that a series, z, t and channel counts are named, and when nothing is refused (19 checks).
+
+`BODY=gui_test_parity_results_body.groovy tests/run_gui_test.sh` builds result tables of 150 000, 100 000, 2 001 and a few rows, with quoted commas, doubled quotes and multi-line cells, and checks the rows shown and the sentence (12 checks).
 
 `BODY=gui_test_buttons_body.groovy tests/run_gui_test.sh` clicks "Rescan apps" and "Restart worker" (3 checks; on the version before the split the Rescan button threw `MissingMethodException` because a local variable named `rescan` shadowed the method).
 

@@ -51,7 +51,7 @@ class LcConst {
     static final String MAX_EXPORT_PROPERTY = "lc.qupath.max_export_pixels"   // system property that replaces MAX_EXPORT_PIXELS (the tests use it to trigger the guard on a small image)
     static final double FULL_RESOLUTION = 1.0d           // downsample of every export and of every offset for now (the resolution choice is a later step)
     static final int RESULTS_KEPT = 20                   // results folders kept under <LC_HOME>/results (same as the command line, cli.RESULTS_KEPT)
-    static final int TABLE_ROWS_SHOWN = 2000             // rows of a result table put in the results window
+    static final int TABLE_ROWS_SHOWN = 100_000          // rows of a result table put in the results window (same as Napari, _results.MAX_TABLE_ROWS); a TableView draws only the rows in view
     static final int LOG_KEPT = 200                      // messages LcLog.recent keeps
     static final int STDERR_TRIM_ABOVE = 20000           // the worker's error text is cut back ...
     static final int STDERR_KEEP = 10000                 // ... to this many characters at the end once it is longer than the line above
@@ -60,6 +60,7 @@ class LcConst {
     static final int MODE_OTHERS_WRITE = 02              // unix mode bit: writable by others (registry trust check)
     static final int MODE_STICKY = 01000                 // unix mode bit, in a directory: only the owner of a file may replace it
     static final List<Double> SUPPORTED_PROTOCOLS = [1d] // schema protocol versions this script understands
+    static final String REFUSAL_CODE = "host_refusal"    // internal code of an LcRefusal outcome (never shown: the status line shows the sentence alone)
     // timeouts and delays
     static final int EXIT_WAIT_SECONDS = 2               // how long a crash text waits for the worker's exit code
     static final int POLL_SECONDS = 1                    // a run checks whether the worker is still alive this often
@@ -89,6 +90,13 @@ class LcConst {
     static final int PREVIEW_MIN_WIDTH = 240             // a small result is enlarged to at least this
     static final int TABLE_HEIGHT = 260
     static final double LABEL_HUE_STEP = 0.61803398875d  // golden ratio: neighbouring label numbers get well separated colours in the preview
+}
+
+// ---------------------------------------------------------------------------------------------------- refusals
+/** A run the host refuses before starting any tool (no selection, no image, an area outside the image, ...). The message is the whole sentence the person
+ *  reads, the way the Napari and Fiji hosts show it: the status line shows it alone, with no class name and no "failed:". */
+class LcRefusal extends IllegalStateException {
+    LcRefusal(String sentence) { super(sentence) }
 }
 
 // ---------------------------------------------------------------------------------------------------- logging
@@ -1341,6 +1349,9 @@ class LcDialog {
                     progress.progress = (current != null && maximum) ? (current as double) / (maximum as double) : ProgressBar.INDETERMINATE_PROGRESS
                 }
             }
+        } catch (LcRefusal e) {
+            LcLog.warn("run of '" + toolId + "' refused: " + e.message)      // a sentence for the person, not a failure: no stack trace
+            outcome = [responseType: "FAILURE", error: e.message, code: LcConst.REFUSAL_CODE]
         } catch (Exception e) {
             // broad on purpose (isolation boundary of the run thread): any failure becomes the outcome the person reads (status line and Details, with the stack trace)
             LcLog.warn("run of '" + toolId + "' failed on the host", e)
@@ -1359,16 +1370,16 @@ class LcDialog {
         def chosen = imageChoiceAtRun[p.region_of]
         def data = qupath?.imageData
         if (data == null || chosen == null || !chosen.startsWith("Current image"))
-            throw new IllegalStateException("'" + label + "': the selection belongs to the image open in QuPath: choose 'Current image' for the image, or untick the selection")
+            throw new LcRefusal("'" + label + "': the selection belongs to the image open in QuPath: choose 'Current image' for the image, or untick the selection")
         def selected = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }
-        if (!selected) throw new IllegalStateException("'" + label + "': no annotation is selected: select one or more annotations, or untick the selection")
-        if (selected.size() > LcConst.MAX_REGION_OBJECTS) throw new IllegalStateException("'" + label + "': " + selected.size() + " annotations are selected; at most " + LcConst.MAX_REGION_OBJECTS + " are supported")
+        if (!selected) throw new LcRefusal("'" + label + "': no annotation is selected: select one or more annotations, or untick the selection")
+        if (selected.size() > LcConst.MAX_REGION_OBJECTS) throw new LcRefusal("'" + label + "': " + selected.size() + " annotations are selected; at most " + LcConst.MAX_REGION_OBJECTS + " are supported")
         def server = data.server
         def area = areasAtRun[p.region_of] ?: LcArea.whole(server)
         if (LcArea.pixels(area) > LcConst.MAX_REGION_PIXELS)
-            throw new IllegalStateException("'" + label + "': the " + (areasAtRun[p.region_of] ? "area" : "image") + " has " + LcArea.pixels(area) + " pixels; a selection region is supported up to " + LcConst.MAX_REGION_PIXELS + " (choose 'Image area: " + LcArea.SELECTION + "' on the image, or use a smaller image or a file)")
+            throw new LcRefusal("'" + label + "': the " + (areasAtRun[p.region_of] ? "area" : "image") + " has " + LcArea.pixels(area) + " pixels; a selection region is supported up to " + LcConst.MAX_REGION_PIXELS + " (choose 'Image area: " + LcArea.SELECTION + "' on the image, or use a smaller image or a file)")
         def mask = paintLabelMask(selected, area.width as int, area.height as int, area.x0 as double, area.y0 as double)
-        if (mask == null) throw new IllegalStateException("'" + label + "': the selected annotations cover no pixel of the " + (areasAtRun[p.region_of] ? "Image area" : "image"))
+        if (mask == null) throw new LcRefusal("'" + label + "': the selected annotations cover no pixel of the " + (areasAtRun[p.region_of] ? "Image area" : "image"))
         def out = new File(tmp, p.name + ".tif")
         ImageWriterTools.writeImage(mask, out.absolutePath)
         return out
@@ -1427,7 +1438,7 @@ class LcDialog {
             def odd = exported.find { !areas.containsKey(it.name) || !LcArea.same(areas[it.name], areas[first]) }
             if (odd != null) {
                 def describe = { name -> areas.containsKey(name) ? LcArea.describe(areas[name]) : "the whole image (a project image, a file or Whole image)" }
-                throw new IllegalStateException("'" + odd.label + "' and '" + params.find { it.name == first }.label + "' use different areas: " + describe(odd.name) + " and " + describe(first) +
+                throw new LcRefusal("'" + odd.label + "' and '" + params.find { it.name == first }.label + "' use different areas: " + describe(odd.name) + " and " + describe(first) +
                         ". The results of a tool can have only one offset: use the same Image area for all image inputs, or Whole image")
             }
         }
@@ -1455,26 +1466,26 @@ class LcDialog {
     Map resolveAreaOnFx(Map p, String kind, def server) {
         def label = p.label as String
         def data = qupath?.imageData
-        if (data == null) throw new IllegalStateException("'" + label + "': no image is open in QuPath for the Image area '" + kind + "': open the image, or choose '" + LcArea.WHOLE + "'")
+        if (data == null) throw new LcRefusal("'" + label + "': no image is open in QuPath for the Image area '" + kind + "': open the image, or choose '" + LcArea.WHOLE + "'")
         def viewer = qupath.viewer
         int z = viewer?.imageData != null ? viewer.getZPosition() : 0, t = viewer?.imageData != null ? viewer.getTPosition() : 0       // the plane the person is looking at
         def area = kind == LcArea.SELECTION ? selectionArea(label, data, server, z, t) : kind == LcArea.VIEWPORT ? viewportArea(label, viewer, server, z, t) : null
-        if (area == null && kind != LcArea.SELECTION && kind != LcArea.VIEWPORT) throw new IllegalStateException("'" + label + "': unknown Image area '" + kind + "'")
-        if (area == null) throw new IllegalStateException("'" + label + "': the " + kind + " lies outside the image: choose another area, or '" + LcArea.WHOLE + "'")
+        if (area == null && kind != LcArea.SELECTION && kind != LcArea.VIEWPORT) throw new LcRefusal("'" + label + "': unknown Image area '" + kind + "'")
+        if (area == null) throw new LcRefusal("'" + label + "': the " + kind + " lies outside the image: choose another area, or '" + LcArea.WHOLE + "'")
         return area
     }
 
     /** The bounding box of the selected annotations (points do not count), clamped to the image. */
     static Map selectionArea(String label, def data, def server, int z, int t) {
         def rois = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }*.ROI
-        if (!rois) throw new IllegalStateException("'" + label + "': no annotation is selected for the Image area '" + LcArea.SELECTION + "': select one or more annotations, or choose '" + LcArea.WHOLE + "'")
+        if (!rois) throw new LcRefusal("'" + label + "': no annotation is selected for the Image area '" + LcArea.SELECTION + "': select one or more annotations, or choose '" + LcArea.WHOLE + "'")
         def box = [rois*.boundsX.min(), rois*.boundsY.min(), rois.collect { it.boundsX + it.boundsWidth }.max(), rois.collect { it.boundsY + it.boundsHeight }.max()]
         return LcArea.clamped(LcArea.SELECTION, box as List<Double>, server, z, t)
     }
 
     /** The bounds of the region the viewer shows, clamped to the image. */
     static Map viewportArea(String label, def viewer, def server, int z, int t) {
-        if (viewer == null || viewer.imageData == null) throw new IllegalStateException("'" + label + "': no viewer shows the image for the Image area '" + LcArea.VIEWPORT + "': open the image in a viewer, or choose '" + LcArea.WHOLE + "'")
+        if (viewer == null || viewer.imageData == null) throw new LcRefusal("'" + label + "': no viewer shows the image for the Image area '" + LcArea.VIEWPORT + "': open the image in a viewer, or choose '" + LcArea.WHOLE + "'")
         def b = viewer.displayedRegionShape.bounds2D
         return LcArea.clamped(LcArea.VIEWPORT, [b.minX, b.minY, b.maxX, b.maxY], server, z, t)
     }
@@ -1488,6 +1499,7 @@ class LcDialog {
         def server = v.file ? ImageServers.buildServer(existingFile(v.file as String).absolutePath) : v.source.call()
         def area = areasAtRun[name] ?: LcArea.whole(server)
         guardExportSize(p, server, area)
+        guardPlanes(p, server, area)
         if (oneChannel && server.nChannels() > 1)       // PickChannel: only the chosen channel is exported
             server = new TransformedServerBuilder(server).extractChannels(v.channel as int).build()
         def out = new File(tmp, name + ".tif")
@@ -1502,6 +1514,22 @@ class LcDialog {
         def name = server.metadata?.name ?: new File(server.path.replaceFirst(/^[^:]*:\s*/, "")).name
         throw new IllegalStateException("'" + p.label + "': the image '" + name + "' would be sent as " + area.width + " x " + area.height + " = " + pixels + " pixels (" + (area.kind == LcArea.WHOLE ? "whole image" : area.kind) +
                 "), above the limit of " + budget + " pixels per plane (system property " + LcConst.MAX_EXPORT_PROPERTY + "). Choose 'Image area: " + LcArea.SELECTION + "' to send a part of it, or use a smaller image or a file")
+    }
+
+    /** A tool that declares its axes (Axes("YX")) gets no stack by chance: a Z or T axis the tool does not declare is refused for the whole image, with the Tools
+     *  sentence (wrong_dimensions) first. The plane on screen is sent only when the person chooses an Image area (selection or viewport), which names that plane. */
+    static void guardPlanes(Map p, def server, Map area) {
+        String axes = p.axes as String
+        if (!axes || area.kind != LcArea.WHOLE) return
+        def extra = [[server.nZSlices(), "Z", "z-planes"], [server.nTimepoints(), "T", "time points"]].findAll { it[0] > 1 && !axes.contains(it[1] as String) }
+        if (!extra) return
+        def sizes = []
+        if (server.nTimepoints() > 1) sizes << server.nTimepoints()
+        if (server.nZSlices() > 1) sizes << server.nZSlices()
+        if (server.nChannels() > 1) sizes << server.nChannels()
+        sizes << server.height << server.width
+        throw new LcRefusal("'" + p.label + "' must be a " + axes.length() + "D image (" + axes + ") but got " + sizes.size() + "D with shape (" + sizes.join(", ") + ")" +
+                ": the image has " + extra.collect { it[0] + " " + it[2] }.join(" and ") + ". Choose 'Image area: " + LcArea.VIEWPORT + "' to send the plane on screen, or use a 2D image")
     }
 
     /** The file, or FileNotFoundException with its path. */
@@ -1566,6 +1594,8 @@ class LcDialog {
             a.headerText = toolLabel + ": nothing found"
             a.initOwner(stage)
             a.show()
+        } else if (code == LcConst.REFUSAL_CODE) {
+            status.text = error            // a refusal of the host: the sentence alone, like Napari and Fiji
         } else {
             status.text = "failed: " + error
         }
@@ -1610,14 +1640,14 @@ class LcDialog {
                 messageLabel.visible = true; messageLabel.managed = true
                 break
             case "points":
-                box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String))
+                box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String, (r.name ?: "points") as String))
                 break
             case "shapes":
                 box.children.addAll(boldLabel((r.name ?: "shapes") + " (outlines)"), wrapped(placeShapes(appName, r)))
                 break
             case ["image", "labels"]: box.children.addAll(imageSection(r)); break
             case "table":
-                box.children.addAll(boldLabel(r.name ?: "table"), tableView(r.path as String))
+                box.children.addAll(boldLabel(r.name ?: "table"), tableView(r.path as String, (r.name ?: "table") as String))
                 break
             case "affine": box.children.addAll(affineSection(r)); break
             default:
@@ -1811,21 +1841,52 @@ class LcDialog {
     /** A bold heading label. */
     static Label boldLabel(String text) { def l = new Label(text); l.style = "-fx-font-weight: bold"; return l }
 
-    /** The first LcConst.TABLE_ROWS_SHOWN rows of a CSV file as a table, with the row count and the path. */
-    static Node tableView(String csvPath) {
-        def lines = new File(csvPath).readLines("UTF-8")
-        if (lines.isEmpty()) return new Label("(empty table)")
-        def header = splitCsv(lines[0])
+    /** The first LcConst.TABLE_ROWS_SHOWN rows of a CSV file as a table; under it "table 'name' (N rows, first M shown)" (the Napari sentence) and the path. */
+    static Node tableView(String csvPath, String name) {
+        def csv = readCsv(csvPath, LcConst.TABLE_ROWS_SHOWN + 1)      // the header and the rows that are shown
+        def rows = csv.rows
+        if (rows.isEmpty()) return new Label("(empty table)")
         def table = new TableView<List<String>>()
-        header.eachWithIndex { String h, int i ->
+        rows[0].eachWithIndex { String h, int i ->
             def col = new TableColumn<List<String>, String>(h)
             col.cellValueFactory = { cd -> new javafx.beans.property.SimpleStringProperty(i < cd.value.size() ? cd.value[i] : "") } as javafx.util.Callback
             table.columns.add(col)
         }
-        lines.drop(1).take(LcConst.TABLE_ROWS_SHOWN).each { table.items.add(splitCsv(it)) }
+        rows.drop(1).each { table.items.add(it) }
         table.prefHeight = LcConst.TABLE_HEIGHT
-        def rows = Math.max(0, lines.size() - 1)
-        return new VBox(4, table, new Label(rows + " row(s)" + (rows > LcConst.TABLE_ROWS_SHOWN ? " (first " + LcConst.TABLE_ROWS_SHOWN + " shown; the full table is in " + csvPath + ")" : "") + "  " + csvPath))
+        int shown = rows.size() - 1
+        def counted = shown + csv.hidden
+        return new VBox(4, table, new Label("table '" + name + "' (" + (csv.hidden ? counted + " rows, first " + shown + " shown; the full table is in " + csvPath : counted + " rows") + ")  " + csvPath))
+    }
+
+    /** A CSV file as records: [rows: the first `keep` records (cells as text), hidden: how many more there are]. A quoted cell may hold commas, doubled quotes and line breaks. */
+    static Map readCsv(String csvPath, int keep) {
+        def rows = [], row = [], cell = new StringBuilder()
+        int hidden = 0
+        boolean quoted = false, any = false
+        def endRecord = {
+            row << cell.toString(); cell.setLength(0)
+            if (rows.size() < keep) rows << row else hidden++
+            row = []; any = false
+        }
+        new File(csvPath).withReader("UTF-8") { reader ->
+            int previous = -1
+            int c = reader.read()
+            for (; c != -1; c = reader.read()) {
+                any = true
+                if (quoted) {
+                    if (c == 34) { quoted = false } else cell.append((char) c)
+                } else if (c == 34 && previous == 34) {         // a doubled quote inside a quoted cell: one quote
+                    cell.append('"'); quoted = true
+                } else if (c == 34) { quoted = true }
+                else if (c == 44) { row << cell.toString(); cell.setLength(0) }
+                else if (c == 10) { endRecord() }
+                else if (c != 13) cell.append((char) c)
+                previous = c
+            }
+        }
+        if (any) endRecord()
+        return [rows: rows, hidden: hidden]
     }
 
     /** One CSV line into cells: commas separate, double quotes group, a doubled quote is one quote (no multi-line cells). */
