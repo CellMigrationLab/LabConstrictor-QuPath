@@ -2,6 +2,10 @@
 
 The QuPath extension runs registered LabConstrictor Python tools on image data selected in QuPath. It is currently a prototype targeting QuPath 0.7.
 
+## Scientific applications
+
+For applications you can install, see [Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground), [NucleiSky](https://github.com/CellMigrationLab/NucleiSky), [VLab4Mic desktop](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) and [CellTracksColab desktop](https://github.com/CellMigrationLab/CellTracksColab_LabConstrictor). The corresponding README links to installation instructions and explains which host workflows have been documented. Only tools registered by the installed application appear in the bridge.
+
 ## Before you start
 
 Install the QuPath extension and a registered LabConstrictor application. Open an image in QuPath. Use `labconstrictor-tools list` to inspect installed applications.
