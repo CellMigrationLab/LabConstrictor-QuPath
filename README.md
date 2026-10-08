@@ -82,6 +82,8 @@ QuPath does not need the application's Python packages. The bridge launches the 
 
 The shared log is under `~/.labconstrictor/logs/` by default. Use **Details** when a tool fails, or run `labconstrictor-tools support-bundle` when reporting an issue.
 
+For more detail, see [QuPath image regions and results](docs/USING_QUPATH.md).
+
 ## For developers and testers
 
 The main extension script is `src/main/resources/org/cellmigrationlab/labconstrictor/qupath/LabConstrictorTools.groovy`. It contains the registry reader, worker connection, form, image export, coordinate conversion and result presentation.
