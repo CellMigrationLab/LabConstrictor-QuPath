@@ -6,6 +6,9 @@
  * own Python environment through the LabConstrictor worker (JSON lines on stdin/stdout), so QuPath never imports the app's packages.
  *
  * Use it as the extension jar (Extensions > LabConstrictor tools...) or paste it in the Script Editor and run it.
+ *
+ * Sections, in file order: logging (LcLog), JSON (LcJson), registry and trust checks (LcRegistry), the worker (LcWorker), the dialog (LcDialog:
+ * form, copy as command, request, running, results) and the entry point.
  */
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
@@ -46,6 +49,7 @@ class LcLog {
     static final List<String> recent = Collections.synchronizedList(new ArrayList<String>())
     private static final Set<String> seen = Collections.synchronizedSet(new HashSet<String>())
 
+    /** Remembers the message in `recent`, capped at the newest 200. */
     private static void keep(String text) { recent << text; while (recent.size() > 200) recent.remove(0) }
 
     static void warn(String text, Throwable t = null) {
@@ -60,6 +64,7 @@ class LcLog {
         return first
     }
 
+    /** The stack trace of `t` as text (for the Details window). */
     static String trace(Throwable t) { def w = new StringWriter(); t.printStackTrace(new PrintWriter(w)); return w.toString() }
 
     /** Best-effort removal of a temporary folder: a folder that stays behind is reported, not ignored. */
@@ -69,6 +74,7 @@ class LcLog {
 }
 
 // ---------------------------------------------------------------------------------------------------- JSON (QuPath ships Gson, not groovy-json)
+/** One Gson instance each for compact and pretty output; numbers come back as Double (see LcDialog.show). */
 class LcJson {
     static final Gson GSON = new GsonBuilder().serializeNulls().disableHtmlEscaping().create()
     static final Gson PRETTY = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().create()
@@ -79,9 +85,12 @@ class LcJson {
 }
 
 // ---------------------------------------------------------------------------------------------------- registry and trust checks
+/** Finds the registered LabConstrictor apps and refuses entries that fail the trust checks in load(). */
 class LcRegistry {
+    /** Variables removed from the worker's environment so the app's own Python is not mixed with QuPath's or the user's. */
     static final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH", "PYTHONPATH"]
 
+    /** Folders searched for app registry files, in priority order: $LC_HOME/apps (default ~/.labconstrictor/apps), $LC_APPS_PATH, then the machine-wide folder. */
     static List<File> searchPath() {
         def env = System.getenv()
         def home = env.LC_HOME ? new File(env.LC_HOME) : new File(System.getProperty("user.home"), ".labconstrictor")
@@ -106,7 +115,7 @@ class LcRegistry {
                 try {
                     def entry = LcJson.parse(file)
                     if (!new File(entry.python as String).isFile()) throw new IllegalStateException("interpreter not found: " + entry.python)
-                    // lexical check, like the Python side: a venv's interpreter is a link to a Python outside the prefix
+                    // lexical check (path text, links are not followed): a venv's interpreter is a link to a Python outside the prefix
                     def prefix = new File(entry.prefix as String).toPath().toAbsolutePath().normalize()
                     if (!new File(entry.python as String).toPath().toAbsolutePath().normalize().startsWith(prefix))
                         throw new IllegalStateException("interpreter is not inside the app's prefix")
@@ -129,6 +138,7 @@ class LcRegistry {
 }
 
 // ---------------------------------------------------------------------------------------------------- the worker
+/** One Python worker process of an app: JSON lines on stdin/stdout, one reader thread per stream, one result queue per running task. */
 class LcWorker {
     Process proc
     final Map<String, BlockingQueue<Map>> tasks = new java.util.concurrent.ConcurrentHashMap<>()
@@ -177,9 +187,10 @@ class LcWorker {
         }
     }
 
+    /** The worker's last error output (trimmed to the last 10 000 characters whenever it passes 20 000). */
     String stderrText() { stderrTail.toString() }
 
-    /** What to tell the person when the worker ends without answering: the likely cause from the exit code (same wording as the Python and Fiji hosts), then the worker's own last words. */
+    /** What to tell the person when the worker ends without answering: the likely cause from the exit code (wording close to the Fiji host's), then the worker's own last words. */
     String crashText() {
         Integer code = null
         try { if (proc.waitFor(2, TimeUnit.SECONDS)) code = proc.exitValue() } catch (InterruptedException e) { Thread.currentThread().interrupt(); LcLog.warn("interrupted while waiting for the worker's exit code", e) }
@@ -213,8 +224,9 @@ class LcWorker {
             currentTask = null
         }
     }
-    volatile String currentTask = null
+    volatile String currentTask = null      // id of the run in progress (cancel targets it)
 
+    /** Writes one JSON line to the worker; synchronized so lines from the run and cancel threads never interleave. */
     private synchronized void send(Map message) {
         if (message.requestType == "EXECUTE") currentTask = message.task
         def out = proc.outputStream
@@ -233,12 +245,14 @@ class LcWorker {
         }
     }
 
+    /** Ends the worker and its child processes at once. */
     void kill() {
         closed = true
         try { proc.descendants().each { it.destroyForcibly() } } catch (SecurityException | UnsupportedOperationException e) { LcLog.warn("could not stop the worker's child processes", e) }
         proc.destroyForcibly()
     }
 
+    /** Closes the worker's input so it ends by itself; killed if it is still there after 10 s. */
     void close() {
         closed = true
         try { proc.outputStream.close() } catch (IOException e) { LcLog.warn("could not close the worker's input (it is killed if it does not stop)", e) }
@@ -247,7 +261,9 @@ class LcWorker {
 }
 
 // ---------------------------------------------------------------------------------------------------- the dialog (the form, the request, running, results, copy as command)
+/** The tools dialog. State (maps of controls, getters, setters) is rebuilt for every tool; the tests read some of it. */
 class LcDialog {
+    // ---- helpers and state
     /** Gson reads every JSON number as a Double: show whole numbers without ".0". */
     static String show(Object v) {
         if (v instanceof Double && Double.isFinite(v) && v == Math.rint(v) && Math.abs(v) < 1e15) return String.valueOf(v.longValue())
@@ -341,6 +357,7 @@ class LcDialog {
         choiceTimer.onFinished = { resolveChoices() }
     }
 
+    /** The scrolling area that holds the generated form. */
     ScrollPane formScroll() {
         def scroll = new ScrollPane(formBox)
         scroll.fitToWidth = true
@@ -350,6 +367,7 @@ class LcDialog {
         return scroll
     }
 
+    /** Cancel, Rescan apps, Restart worker, Details and the Copy as command menu. */
     HBox buttonRow() {
         def rescanButton = new Button("Rescan apps")
         rescanButton.onAction = { rescan() }
@@ -358,6 +376,7 @@ class LcDialog {
         return new HBox(6, cancelButton, rescanButton, restartButton, detailsButton, copyMenu())
     }
 
+    /** The Copy as command menu button (terminal line or Python snippet). */
     MenuButton copyMenu() {
         def copyMenu = new MenuButton("Copy as command")
         copyMenu.tooltip = new Tooltip("Copy what repeats this run outside QuPath: a terminal line or a Python snippet")
@@ -368,6 +387,7 @@ class LcDialog {
         return copyMenu
     }
 
+    /** Reads the registry again and keeps the chosen app when it is still there. */
     void rescan() {
         def registry = LcRegistry.load()
         apps = registry.apps
@@ -378,12 +398,14 @@ class LcDialog {
         status.text = "Found " + apps.size() + " app(s)" + (problems ? "; skipped: " + problems.join("; ") : "")
     }
 
+    /** A new app was chosen: list its tools. */
     void onApp() {
         def app = apps[appBox.value]
         toolBox.items.setAll(app ? app.schema.tools.collect { it.label } : [])
         if (!toolBox.items.isEmpty()) toolBox.value = toolBox.items.first()
     }
 
+    /** A new tool was chosen: forget the old form's controls and build the new form. */
     void onTool() {
         def app = apps[appBox.value]
         currentTool = app?.schema?.tools?.find { it.label == toolBox.value }
@@ -398,6 +420,7 @@ class LcDialog {
     }
 
     // ---- dynamic choices (ChoicesFrom), clear after run
+    /** Asks for the choices again (after 400 ms of quiet) whenever a parameter the choices depend on changes. */
     void hookChoices() {
         currentTool.inputs.findAll { it.choices_from }.each { p ->
             p.choices_from.depends.each { dep ->
@@ -408,12 +431,14 @@ class LcDialog {
         }
     }
 
+    /** (Re)starts the timer that resolves the choices; a burst of changes becomes one question. */
     void scheduleChoices(int delayMs) {
         if (choiceBoxes.isEmpty()) return
         choiceTimer.duration = Duration.millis(Math.max(delayMs, 1))
         choiceTimer.playFromStart()
     }
 
+    /** Starts one worker-side question per ChoicesFrom parameter; each gets a number so a late answer for an older question is dropped. */
     void resolveChoices() {
         if (currentTool == null || choiceBoxes.isEmpty()) return
         if (running) { scheduleChoices(1500); return }              // the worker is busy with a run: ask again afterwards
@@ -499,7 +524,8 @@ class LcDialog {
     }
 
     // ---- the form: images available in QuPath
-    Map<String, Closure> imageSources() {   // label -> closure returning the ImageServer
+    /** The images a form can use: the open image first, then every image of the project (label -> closure that returns its ImageServer). */
+    Map<String, Closure> imageSources() {
         def sources = new LinkedHashMap<String, Closure>()
         def data = qupath?.imageData
         if (data != null) {
@@ -516,6 +542,7 @@ class LcDialog {
     }
 
     // ---- the form: building it for the chosen tool
+    /** Rows for the normal parameters, one collapsed section per Collapsed group, one for Advanced; then the links between parameters. */
     void buildForm(List inputs) {
         def sources = imageSources()
         def shown = inputs.findAll { !it.advanced }, advanced = inputs.findAll { it.advanced }
@@ -544,6 +571,7 @@ class LcDialog {
         inputs.findAll { it.pixel_size_of }.each { p -> fillPixelSize(p) }
     }
 
+    /** A two-column grid (label, control) with the form's spacing. */
     GridPane newGrid() {
         def grid = new GridPane()
         grid.hgap = 8
@@ -555,6 +583,7 @@ class LcDialog {
         return grid
     }
 
+    /** One row per parameter (group headings between groups); the description becomes the label's tooltip. */
     void addRows(GridPane grid, List params, Map sources) {
         int row = 0
         String lastGroup = null
@@ -615,6 +644,7 @@ class LcDialog {
         return node
     }
 
+    /** The control builders below each return [node, get, set] and register the control under the parameter's name. */
     Map booleanControl(Map p) {
         def box = new CheckBox()
         box.selected = p.default == true
@@ -650,6 +680,7 @@ class LcDialog {
         return new HBox(12, *buttons, box)
     }
 
+    /** A spinner (optionally with a slider); with no declared limits it accepts +-1e9 (inside a Java int). */
     Map integerControl(Map p) {
         def lo = p.minimum != null ? (p.minimum as double).longValue() : -1000000000L
         def hi = p.maximum != null ? (p.maximum as double).longValue() : 1000000000L
@@ -663,6 +694,7 @@ class LcDialog {
         return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = (it as double).intValue() }]
     }
 
+    /** A spinner (optionally with a slider); with no declared limits it accepts +-1e12. The step is 1% of a range of 100 or less, else 1. */
     Map floatControl(Map p) {
         def lo = p.minimum != null ? p.minimum as double : -1e12d
         def hi = p.maximum != null ? p.maximum as double : 1e12d
@@ -677,6 +709,7 @@ class LcDialog {
         return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = it as double }]
     }
 
+    /** A slider is only offered when asked for, the parameter is not optional and both limits are known. */
     static boolean wantsSlider(Map p) { p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null }
 
     /** Widget("slider"): a slider beside the typed box, kept in step; `toSpinner` puts a slider position into the spinner. */
@@ -775,6 +808,7 @@ class LcDialog {
         return selectionBox
     }
 
+    /** A text field with a Browse button (folder chooser for a folder); empty text means unset. */
     Map fileControl(Map p) {
         def field = new TextField()
         field.maxWidth = Double.MAX_VALUE
@@ -788,6 +822,7 @@ class LcDialog {
         return [node: new HBox(6, field, browse), get: { field.text?.trim() ? field.text.trim() : null }, set: { field.text = it as String }]
     }
 
+    /** A text field; with ChoicesFrom a hidden dropdown is placed under it and takes over when the source tool lists options. */
     Map stringControl(Map p) {
         def name = p.name
         def field = new TextField(p.default != null ? p.default.toString() : "")
@@ -809,6 +844,7 @@ class LcDialog {
         return [node: node, get: { field.text }, set: { field.text = it as String }]
     }
 
+    /** A spinner only takes typed text on Enter; this also takes it when the box loses focus. */
     void commitOnFocusLost(Spinner spinner, String label = null) {
         spinner.focusedProperty().addListener({ o, a, focused -> if (!focused) commitSpinner(spinner, label) } as javafx.beans.value.ChangeListener)
     }
@@ -824,6 +860,7 @@ class LcDialog {
         }
     }
 
+    /** EnabledWhen: the parameter's row is disabled unless the driving parameter has the required value (or is set, when no value is named). */
     void hookEnabled(Map p) {
         def cond = p.enabled_when
         def driver = controls[cond.param]
@@ -839,6 +876,7 @@ class LcDialog {
         update()
     }
 
+    /** PixelSizeOf: refill the pixel size whenever another image is chosen. */
     void hookPixelSize(Map p) {
         def box = imageBoxes[p.pixel_size_of]
         if (box != null) box.valueProperty().addListener({ o, a, b -> fillPixelSize(p) } as javafx.beans.value.ChangeListener)
@@ -859,9 +897,11 @@ class LcDialog {
         }
     }
 
-    // ---- copy as command (same text as labconstrictor_tools.command)
+    // ---- copy as command (the text format of labconstrictor_tools.command, the reference; shell quoting only through shellQuote)
+    /** The placeholder path written for a required file-like parameter that has no path. */
     static final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
+    /** Quotes one word for a POSIX shell or for Windows; text made only of safe characters stays as it is. */
     static String shellQuote(String text, boolean windows) {
         if (windows) return (text && text ==~ /[A-Za-z0-9_.:\/\\=+,-]+/) ? text : '"' + text.replace('"', '\\"') + '"'
         return (text && text ==~ /[A-Za-z0-9_@%+=:,.\/-]+/) ? text : "'" + text.replace("'", "'\"'\"'") + "'"
@@ -905,6 +945,7 @@ class LcDialog {
         return path
     }
 
+    /** The clipboard text: notes (placeholders, values left out) as comment lines, then the Python snippet or the terminal command. */
     String commandText(String kind) {
         def built = commandValues()
         def head = (built.missing ? ["# replace the file for: " + built.missing.join(", ")] : []) + built.notes
@@ -913,6 +954,7 @@ class LcDialog {
         return note + (kind == "python" ? pythonSnippet(given, built.values) : terminalCommand(given, built.values))
     }
 
+    /** Python that runs the tool once through the client; values are written as Python literals. */
     String pythonSnippet(List given, Map values) {
         def literal = { v -> v instanceof Boolean ? (v ? "True" : "False") : v instanceof Number ? v.toString() : "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'" }
         def body = given ? "{\n" + given.collect { "    '" + it.name + "': " + literal(values[it.name]) + "," }.join("\n") + "\n}" : "{}"
@@ -920,6 +962,7 @@ class LcDialog {
                'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
     }
 
+    /** `python -m labconstrictor_tools run <app> <tool> name=value ...`, every word quoted for this machine's shell. */
     String terminalCommand(List given, Map values) {
         def app = apps[appBox.value]
         boolean windows = System.getProperty("os.name").toLowerCase().contains("win")
@@ -931,6 +974,7 @@ class LcDialog {
         return parts.join(" ")
     }
 
+    /** Puts the command text on the clipboard and returns it (null when no tool is chosen). */
     String copyAsCommand(String kind) {
         if (currentTool == null) return null
         def text = commandText(kind)
@@ -959,6 +1003,7 @@ class LcDialog {
     }
 
     // ---- running
+    /** Run pressed: read the form, then start the run in the background. */
     void run() {
         if (running || currentTool == null) return
         def values = readFormValues()
@@ -997,6 +1042,7 @@ class LcDialog {
         }
     }
 
+    /** Copies what the thread needs (the form may change meanwhile), runs on a thread, shows the outcome on the FX thread. */
     void runInBackground(Map values) {
         def toolId = currentTool.id as String
         def app = apps[appBox.value]
@@ -1034,6 +1080,7 @@ class LcDialog {
         return outcome
     }
 
+    // ---- the request: what the tool receives
     static final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
     static final long MAX_REGION_PIXELS = 100_000_000L   // the painted label image is held in memory
 
@@ -1076,6 +1123,7 @@ class LcDialog {
         return any ? mask : null
     }
 
+    /** The request inputs: every form value prepared, plus the host-owned results folder as `_job_dir`. */
     Map prepareInputs(Map values, List params, File tmp, String appName, String toolId) {
         def inputs = new LinkedHashMap()
         values.each { name, v -> inputs[name] = prepareInput(params.find { it.name == name }, name as String, v, tmp, appName) }
@@ -1094,6 +1142,7 @@ class LcDialog {
         return v
     }
 
+    /** An image value becomes a file path: the selection mask, the file as typed, or an exported TIFF (one channel when PickChannel chose one). */
     String prepareImageInput(Map p, String name, Map v, File tmp, String appName) {
         if (v.selection) return selectionMask(p, tmp, appName).absolutePath          // RegionOf: the selected annotations
         boolean oneChannel = p.pick_channel && v.channel != null && v.channel >= 0
@@ -1106,13 +1155,14 @@ class LcDialog {
         return out.absolutePath
     }
 
+    /** The file, or FileNotFoundException with its path. */
     static File existingFile(String path) {
         def f = new File(path)
         if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
         return f
     }
 
-    /** Results go to a host-owned folder next to the ones the command line makes (the newest 20 are kept). */
+    /** Results go to a new folder under <LC_HOME>/results, where the command line also puts its runs; this folder and the 19 before it (by name) are kept. */
     static File newJobDir(String appName, String toolId) {
         def root = new File(LcRegistry.searchPath().first().parentFile, "results")
         def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss").format(new Date())
@@ -1122,12 +1172,14 @@ class LcDialog {
         return job
     }
 
+    /** Cancel pressed: ask the worker to stop the run. */
     void cancel() {
         status.text = "cancelling..."
         worker?.cancel()
     }
 
     // ---- results
+    /** Back on the FX thread after a run: the form is idle again and the outcome is shown according to its type. */
     void finish(String appName, String toolLabel, Map outcome, double seconds) {
         showIdle()
         def type = outcome.responseType
@@ -1145,6 +1197,7 @@ class LcDialog {
         if (!keepWorker.selected) stopWorker(false)
     }
 
+    /** A completed run: status line with the values, results window, then the post-run updates. */
     void finishCompleted(String appName, String toolLabel, Map outcome, double seconds) {
         def results = outcome.outputs?.results ?: []
         def summary = results.findAll { it.type == "values" }.collect { r -> r.values.collect { k, v -> k + "=" + show(v) }.join(", ") }.join("; ")
@@ -1169,6 +1222,8 @@ class LcDialog {
         }
     }
 
+    // ---- worker lifetime and the Details window
+    /** Releases the worker: killed at once when `force`, else closed on a background thread. */
     void stopWorker(boolean force) {
         def w = worker
         worker = null
@@ -1176,6 +1231,7 @@ class LcDialog {
         if (force) w.kill() else Thread.start { w.close() }
     }
 
+    /** The last run's outcome and the worker's output in a read-only window. */
     void showDetails() {
         def area = new TextArea(lastReport)
         area.editable = false
@@ -1186,6 +1242,8 @@ class LcDialog {
         s.show()
     }
 
+    // ---- results window: one section per output type
+    /** Builds one results window from all outputs of a run. */
     void showResults(String appName, String toolLabel, List results) {
         def box = new VBox(10)
         box.padding = new Insets(10)
@@ -1218,6 +1276,7 @@ class LcDialog {
         }
     }
 
+    /** A name-value grid for a "values" output. */
     List<Node> valuesSection(Map r) {
         def grid = newGrid()
         int row = 0
@@ -1225,6 +1284,7 @@ class LcDialog {
         return [boldLabel(r.name ?: "values"), grid]
     }
 
+    /** Preview, path and an Open in QuPath button for an image or labels output. */
     List<Node> imageSection(Map r) {
         def nodes = []
         def open = new Button("Open in QuPath")
@@ -1238,6 +1298,7 @@ class LcDialog {
         return nodes
     }
 
+    /** An alignment matrix (matrix_yx) printed with 5 decimals. */
     static List<Node> affineSection(Map r) {
         def m = r.matrix_yx
         def txt = (m instanceof List) ? m.collect { row -> row.collect { String.format("%.5f", it as double) }.join("   ") }.join("\n") : m.toString()
@@ -1259,8 +1320,9 @@ class LcDialog {
         resultWindows[key] = stage2
         lastResultStage = stage2
     }
-    Stage lastResultStage
+    Stage lastResultStage       // the window of the last results
 
+    // ---- placing results on the image (points, outlines)
     /** The image open in QuPath when an output's results were found in it (the image parameter was "Current image" for this run); otherwise null. */
     def openImageFor(Map r) {
         def data = qupath?.imageData
@@ -1292,13 +1354,14 @@ class LcDialog {
         return xs.size() + " point(s) added to the open image as the annotation '" + name + "'."
     }
 
+    /** A label that wraps long text. */
     static Label wrapped(String text) {
         def l = new Label(text)
         l.wrapText = true
         return l
     }
 
-    static final int MAX_SHAPES = 50000      // outlines added to the image; the rest are counted in the message
+    static final int MAX_SHAPES = 50000      // outlines added to the image; the message says how many were left out (same limit as the Python reference, shapes.MAX_LABELS_HINT)
 
     /** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) become annotations named "<app>:<output> <label>"
      *  on the image they were found in (when that was the image open in QuPath); holes and parts are kept; numeric properties become
@@ -1351,6 +1414,7 @@ class LcDialog {
         return [objects: objects, holes: holes]
     }
 
+    // ---- previews and tables of results
     /** A small preview of a result image (first plane, first channel, scaled to the window); labels get a colour per label. */
     static Node previewNode(String path, boolean labels) {
         def server = ImageServers.buildServer(path)
@@ -1377,8 +1441,10 @@ class LcDialog {
         return view
     }
 
+    /** A bold heading label. */
     static Label boldLabel(String text) { def l = new Label(text); l.style = "-fx-font-weight: bold"; return l }
 
+    /** The first 2000 rows of a CSV file as a table, with the row count and the path. */
     static Node tableView(String csvPath) {
         def lines = new File(csvPath).readLines("UTF-8")
         if (lines.isEmpty()) return new Label("(empty table)")
@@ -1395,6 +1461,7 @@ class LcDialog {
         return new VBox(4, table, new Label(rows + " row(s)" + (rows > 2000 ? " (first 2000 shown; the full table is in " + csvPath + ")" : "") + "  " + csvPath))
     }
 
+    /** One CSV line into cells: commas separate, double quotes group, a doubled quote is one quote (no multi-line cells). */
     static List<String> splitCsv(String line) {
         def out = [], cur = new StringBuilder()
         boolean quoted = false
@@ -1412,6 +1479,7 @@ class LcDialog {
 }
 
 // ---------------------------------------------------------------------------------------------------- entry point
+// Opens the dialog unless a test or another script sets lcNoShow / -Dlc.noshow (then it only defines the classes).
 def lcShow = {
     def registry = LcRegistry.load()
     def dialog = new LcDialog(QuPathGUI.getInstance(), registry)
