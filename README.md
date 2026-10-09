@@ -1,108 +1,58 @@
 # LabConstrictor for QuPath
 
-**Run registered Python tools on QuPath image regions.**
+Run tools from any **registered LabConstrictor application** on QuPath images. QuPath reads the application's tool manifest, builds a form and launches the tool in its own Python environment. Applications do not need separate QuPath plugins.
 
-LabConstrictor connects QuPath to tools installed with LabConstrictor applications. You choose an image or region in QuPath, run a tool in the application's own Python environment, and inspect the results without moving your analysis code into QuPath.
+This is a **prototype targeting QuPath 0.7**. See [Using LabConstrictor in QuPath](docs/USING_QUPATH.md) for image-area choices, coordinates, results and limitations.
 
-This is a **prototype for QuPath 0.7**. It does not convert label images into native detections or add result tables to object measurements.
+## Start here
 
-## Run a tool on an image region
+1. Install a [LabConstrictor application](#applications) with registered tools. Check it using `labconstrictor-tools list` and `labconstrictor-tools doctor`.
+2. Build the QuPath extension (see below), or obtain its JAR if available. Install it by dragging the JAR onto QuPath's main window or copying it to the QuPath user extensions directory. Restart QuPath.
+3. Open an image and choose **Extensions > LabConstrictor tools...**.
+4. Select an application and tool. For a region-based run, select an annotation, choose **Current image**, and set **Image area** to **Selected annotation(s)**.
+5. Inspect the result window and any annotations created in the image hierarchy.
 
-1. Install and register a LabConstrictor application with image-analysis tools.
-2. Open an image in QuPath and select one or more annotations.
-3. Choose **Extensions > LabConstrictor tools...**.
-4. Pick the application and tool, select **Current image** and set **Image area** to **Selected annotation(s)**.
-5. Run the tool. The bridge exports the bounding region at full resolution, passes it to the tool and presents the results.
+**Selected annotation(s)** exports the **bounding rectangle** of the selected objects, not just pixels inside their shapes. A separate `RegionOf(...)` input can supply a labelled selection mask if the tool declares one. The extension exports at full resolution, with a default limit of **100 million pixels per plane**.
 
-For tools returning points or outlines associated with the current image, the bridge adds the region's origin back to their coordinates. A point found inside a crop can therefore be placed at the correct position on the original slide.
+Points and outlines associated with the image open in QuPath can become annotations in slide coordinates. Image and label results have previews, but **label images are not converted to native detections**, and result tables do not automatically become object measurements.
 
-You can also choose **Current viewport** or **Whole image**. The region chooser applies to the currently open QuPath image, not to arbitrary image files or other project images.
+Do not switch the active QuPath image or change its selection during a running analysis until [run-state handling](https://github.com/CellMigrationLab/LabConstrictor-QuPath/issues/16) is corrected. Check the pixel-size field whenever you change image sources ([calibration issue](https://github.com/CellMigrationLab/LabConstrictor-QuPath/issues/15)).
 
-## What QuPath sends
+## Install or build
 
-The extension builds a form from the tool's declared Python inputs. It supports numbers, choices, text, files, folders, channels and selected regions where the tool declares them.
-
-- **Image input:** use the current image, another image in the project or an image file. QuPath exports its own image data to TIFF.
-- **Image area:** whole image, selected annotation bounding box or current viewport for the open image.
-- **Selection mask:** when a tool declares `RegionOf(...)`, selected annotations can also be sent as a labelled mask over the chosen area.
-- **Channel:** tools declaring `PickChannel()` can receive one selected channel.
-- **Calibration:** pixel size from QuPath can fill the tool's calibration field.
-
-When multiple inputs require different image areas, the bridge refuses the run instead of silently combining incompatible coordinate systems.
-
-### Export size limit
-
-Before exporting an image from QuPath, the extension checks the width × height of the exported area. The default limit is **100 million pixels per plane**. Above that, the run stops with an explanation and asks you to select a smaller area or use a file.
-
-It does **not** silently downsample the image. Exports currently use full resolution. File paths supplied directly to a tool are passed through rather than subjected to QuPath's export-size check.
-
-Advanced users can change the limit with the JVM property `lc.qupath.max_export_pixels`, but doing so can substantially increase memory use.
-
-## What comes back
-
-| Tool result | Current behavior |
-|---|---|
-| Points associated with the open image | QuPath point annotation at the correct image coordinates |
-| Outlines associated with the open image | QuPath annotations with the region offset restored |
-| Image or labels | Preview and path; images can be opened in QuPath |
-| Table | Table in the result window |
-| Values, files, alignment or messages | Displayed in the result window or status area |
-
-**Important:** label images are not currently converted into native QuPath detections or annotations. Result tables are not written into object measurements. Results from a file or another project image are not silently placed on the current image.
-
-## Install
-
-First install and register the LabConstrictor application you want to use. You can inspect registration with:
-
-```bash
-labconstrictor-tools list
-labconstrictor-tools doctor
-```
-
-Build or obtain the extension jar, then drop `labconstrictor-qupath-0.1.0.jar` onto the QuPath window (or place it in the extensions folder) and restart QuPath.
-
-Choose **Extensions > LabConstrictor tools...**.
-
-For development, the bridge can also be run from QuPath's Script Editor using:
-
-```text
-src/main/resources/org/cellmigrationlab/labconstrictor/qupath/LabConstrictorTools.groovy
-```
-
-QuPath does not need the application's Python packages. The bridge launches the tool worker in the registered application's interpreter.
-
-## Limitations
-
-- QuPath 0.7 is the current target; native Windows and macOS testing is still needed.
-- Image export is full-resolution only. There is no user-selectable downsample or target pixel size yet.
-- There is no headless/script API or menu entry for each individual tool.
-- Dynamic choice lists may fall back to a text field if their source tool cannot answer; failures are reported.
-- The **Copy as command** output cannot reproduce a QuPath annotation or viewport selection by itself. It warns when the command would instead send a whole file.
-- Very large tables and object outputs have display limits. A preview is not the same as importing measurements or detections into the project.
-
-The shared log is under `~/.labconstrictor/logs/` by default. Use **Details** when a tool fails, or run `labconstrictor-tools support-bundle` when reporting an issue.
-
-For more detail, see [QuPath image regions and results](docs/USING_QUPATH.md).
-
-## Applications
-
-QuPath reads the same registered LabConstrictor tool manifests as the other hosts. A scientific application does not need a separate QuPath extension to expose its declared tools.
-
-[Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) provides a small example for checking the host. Other applications include [NucleiSky](https://github.com/CellMigrationLab/NucleiSky), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic), [CellTracksColab](https://github.com/CellMigrationLab/CellTracksColab_LabConstrictor) and [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition). See the [Toolkit](https://github.com/CellMigrationLab/LabConstrictor-Tools) for installation links.
-
-**The issue is usefulness, not an application-specific integration requirement.** Image-region analysis and spatial outputs are natural fits for QuPath; game controls or other workflows may be less convenient there. Check how QuPath handles the tool's declared inputs and outputs, especially coordinate mapping and native object creation.
-
-## For developers and testers
-
-The main extension script is `src/main/resources/org/cellmigrationlab/labconstrictor/qupath/LabConstrictorTools.groovy`. It contains the registry reader, worker connection, form, image export, coordinate conversion and result presentation.
-
-The GUI tests require a real QuPath installation. They were not run for this documentation change. To run them on Linux:
+The extension is packaged as `labconstrictor-qupath-0.1.0.jar`. For a development build against an installed QuPath 0.7 and JDK 25:
 
 ```bash
 QUPATH=/path/to/QuPath JAVA_HOME=/path/to/jdk25 ./build.sh
-QUPATH=/path/to/QuPath LC_HOME=/path/to/test-registry tests/run_gui_test.sh
 ```
 
-Additional test bodies cover image areas, export limits, interaction hints, channels, fallbacks and Playground stress cases. See `tests/` for the scripts and fixtures.
+The JAR is written to `target/labconstrictor-qupath-0.1.0.jar`. Follow [QuPath's manual extension installation instructions](https://qupath.readthedocs.io/en/stable/docs/intro/extensions.html#installing-extensions-manually) to install it. Alternatively, developers can open `src/main/resources/org/cellmigrationlab/labconstrictor/qupath/LabConstrictorTools.groovy` in QuPath's Script Editor.
 
-Related projects: [Toolkit](https://github.com/CellMigrationLab/LabConstrictor-Tools) · [Fiji](https://github.com/CellMigrationLab/LabConstrictor-Fiji) · [Napari](https://github.com/CellMigrationLab/napari-labconstrictor) · [Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground).
+For troubleshooting, check the extension's **Details** window and the LabConstrictor log under `~/.labconstrictor/logs/` (or the configured `LC_HOME`). See the [user guide](docs/USING_QUPATH.md).
+
+## Applications
+
+The manifest makes the bridge **application-independent**; the list below is a set of examples, not a compatibility allowlist. Choose tools according to how useful their inputs and outputs are in QuPath.
+
+- [LabConstrictor Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) — test images and bridge diagnostics
+- [NucleiSky](https://github.com/CellMigrationLab/NucleiSky) — microscopy-image registration
+- [VLab4Mic desktop](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) — fluorescence-image simulation
+- [CellTracksColab desktop](https://github.com/CellMigrationLab/CellTracksColab_LabConstrictor) — cell-track analysis
+- [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition) — blinded microscopy-image classification
+
+Each application must be installed and its tool module registered before its tools appear. The [LabConstrictor Toolkit](https://github.com/CellMigrationLab/LabConstrictor-Tools) documents the shared manifest and registration.
+
+## Development and tests
+
+The QuPath implementation is in `src/main/resources/org/cellmigrationlab/labconstrictor/qupath/LabConstrictorTools.groovy`. The extension entry point is `src/main/java/org/cellmigrationlab/labconstrictor/qupath/LabConstrictorExtension.java`.
+
+The GUI test harness requires QuPath, Java and (on Linux) `xvfb-run`. **It alters the selected QuPath installation** by copying the JAR into `lib/app` and modifying `lib/app/QuPath.cfg`; use a disposable test installation:
+
+```bash
+QUPATH=/path/to/disposable-QuPath JAVA_HOME=/path/to/jdk25 ./build.sh
+QUPATH=/path/to/disposable-QuPath LC_HOME=/path/to/test-registry tests/run_gui_test.sh
+```
+
+See `tests/` for test bodies and fixtures. The GUI tests were not run for this documentation change. The extension's [open issues](https://github.com/CellMigrationLab/LabConstrictor-QuPath/issues) record implementation work.
+
+Related hosts: [Fiji](https://github.com/CellMigrationLab/LabConstrictor-Fiji) · [Napari](https://github.com/CellMigrationLab/napari-labconstrictor).
