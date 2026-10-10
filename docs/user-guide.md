@@ -9,7 +9,7 @@ The extension runs the tools of every installed LabConstrictor app from QuPath, 
 
 ## What you need
 
-- QuPath 0.7.
+- [QuPath](https://qupath.github.io) 0.7.
 - At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the extension finds it.
 - To build the jar: JDK 25 (QuPath 0.7 is built with Java 25), as described in the repository's README.
 
