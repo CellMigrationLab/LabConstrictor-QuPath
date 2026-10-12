@@ -76,7 +76,7 @@ Thread.start("lc-gui-test") {
         def outlines = { fx { hierarchy().annotationObjects.findAll { it.name?.startsWith("interactions:outlines ") } } }
         pick(dlg, "interactions", "Outline the blobs"); Thread.sleep(1500)
 
-        // ---- QP-18: a results folder is named like the command line's (<time>_<6 hex>_<app>_<tool>, names made safe), and only such folders are ever pruned
+        // ---- QP-18: a results folder is named like the command line's (<time>_<6 hex>_<app>_<tool>, names made safe), and the host never deletes any folder of <LC_HOME>/results
         expect("slug_unit", LcDialog.slug("../evil name") == "_evil_name" && LcDialog.slug("") == "x" && LcDialog.slug("..") == "x" && LcDialog.slug("a.b-c_d") == "a.b-c_d" && LcDialog.slug("My app/x") == "My_app_x")
         run(dlg)
         expect("run_completes", status(dlg).startsWith("done") && outlines().size() == 4, status(dlg))
@@ -85,18 +85,19 @@ Thread.start("lc-gui-test") {
         expect("results_folder_name_has_time_6_hex_app_and_tool", folders().size() == 1 && folders()[0] ==~ pattern, folders())
         def odd = LcDialog.newJobDir("My app/x", "t:1/../z")
         expect("results_folder_name_is_made_safe", odd.name ==~ /^\d{8}T\d{6}_[0-9a-f]{6}_My_app_x_t_1_.._z$/ && odd.parentFile == resultsRoot && odd.isDirectory(), odd.name)
-        // pruning: 25 old run folders, a foreign folder, a stray file, and a link that looks like a run folder
+        // nothing is deleted: 25 old run folders, a foreign folder, a stray file and a link all survive many new results folders and a run
         def target = new File(home, "linktarget"); target.mkdirs(); new File(target, "precious.txt").text = "x"
         (1..25).each { new File(resultsRoot, String.format("20200101T0000%02d_abcdef_a_b", it)).mkdirs() }
         new File(resultsRoot, "keepme").mkdirs(); new File(resultsRoot, "keepme/notes.txt").text = "mine"
         new File(resultsRoot, "20200101T000000_stray.txt").text = "file"
         java.nio.file.Files.createSymbolicLink(new File(resultsRoot, "20200101T000099_link_x_y").toPath(), target.toPath())
-        def job = LcDialog.newJobDir("a", "b")
-        def runFolders = (resultsRoot.listFiles() ?: []).findAll { it.isDirectory() && !java.nio.file.Files.isSymbolicLink(it.toPath()) && it.name ==~ /^\d{8}T\d{6}_.*/ }
-        expect("the_newest_20_run_folders_are_kept", runFolders.size() == 20 && runFolders.contains(job), runFolders.size())
-        expect("the_oldest_run_folders_were_removed", !new File(resultsRoot, "20200101T000001_abcdef_a_b").exists() && new File(resultsRoot, "20200101T000025_abcdef_a_b").exists(), folders())
-        expect("a_foreign_folder_and_a_stray_file_are_never_touched", new File(resultsRoot, "keepme/notes.txt").text == "mine" && new File(resultsRoot, "20200101T000000_stray.txt").exists(), folders())
-        expect("a_link_named_like_a_run_folder_is_never_followed_or_removed", java.nio.file.Files.isSymbolicLink(new File(resultsRoot, "20200101T000099_link_x_y").toPath()) && new File(target, "precious.txt").exists())
+        def before = folders()
+        def made = (1..30).collect { LcDialog.newJobDir("a", "b") }
+        run(dlg)
+        expect("no_results_folder_is_deleted", folders().containsAll(before) && made.every { it.isDirectory() } && folders().size() >= before.size() + 30, [before.size(), folders().size()])
+        expect("the_oldest_run_folders_survive_too", new File(resultsRoot, "20200101T000001_abcdef_a_b").isDirectory() && new File(resultsRoot, "20200101T000025_abcdef_a_b").isDirectory(), folders())
+        expect("a_foreign_folder_and_a_stray_file_survive", new File(resultsRoot, "keepme/notes.txt").text == "mine" && new File(resultsRoot, "20200101T000000_stray.txt").exists(), folders())
+        expect("a_link_named_like_a_run_folder_survives_with_its_target", java.nio.file.Files.isSymbolicLink(new File(resultsRoot, "20200101T000099_link_x_y").toPath()) && new File(target, "precious.txt").exists())
         expect("two_calls_in_one_second_never_share_a_folder", LcDialog.newJobDir("a", "b") != LcDialog.newJobDir("a", "b"))
 
         // ---- QP-10: an export above 4 GiB (pixels x channels x bytes of the pixel type) is refused, like Napari; the pixel budget keeps working as before

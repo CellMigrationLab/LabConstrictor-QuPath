@@ -52,14 +52,12 @@ class LcConst {
     static final long MAX_EXPORT_BYTES = 4L * 1024 * 1024 * 1024   // bytes (pixels x channels x pixel type) the host exports to a tool from an image; above this the run is refused, as Napari does (_export.MAX_EXPORT_BYTES)
     static final String MAX_EXPORT_BYTES_PROPERTY = "lc.qupath.max_export_bytes"   // system property that replaces MAX_EXPORT_BYTES (the tests use it to trigger the guard on a small image)
     static final double FULL_RESOLUTION = 1.0d           // downsample of every export and of every offset for now (the resolution choice is a later step)
-    static final int RESULTS_KEPT = 20                   // results folders kept under <LC_HOME>/results (same as the command line, cli.RESULTS_KEPT)
     static final int TABLE_ROWS_SHOWN = 100_000          // rows of a result table put in the results window (same as Napari, _results.MAX_TABLE_ROWS); a TableView draws only the rows in view
     static final int LOG_KEPT = 200                      // messages LcLog.recent keeps
     static final String LOG_NAME = "labconstrictor.log"   // the shared log file under <LC_HOME>/logs (labconstrictor_tools.log.LOG_NAME)
     static final long LOG_FILE_BYTES = 1_000_000L        // size of the shared log file before it rotates (log.LOG_FILE_BYTES)
     static final int LOG_FILE_BACKUPS = 5                // rotated files kept next to the current one (log.LOG_FILE_BACKUPS)
     static final int LOG_LEVEL_WIDTH = 7                 // level names are padded to this width, as the Python format does
-    static final int RUN_RECORDS_KEPT = 50               // run folders kept under <LC_HOME>/runs (runs.KEEP)
     static final int RUN_STDERR_CHARS = 4000             // the worker's last output kept in a run record (runs.STDERR_TAIL_CHARS)
     static final int STDERR_TRIM_ABOVE = 20000           // the worker's error text is cut back ...
     static final int STDERR_KEEP = 10000                 // ... to this many characters at the end once it is longer than the line above
@@ -445,7 +443,7 @@ class LcRegistry {
 }
 
 // ---------------------------------------------------------------------------------------------------- run records
-/** One folder per run under <LC_HOME>/runs with a run.json, in the format of labconstrictor_tools.runs (the newest LcConst.RUN_RECORDS_KEPT are kept), so that
+/** One folder per run under <LC_HOME>/runs with a run.json, in the format of labconstrictor_tools.runs (a host never deletes a record: retention belongs to the Tools reference code), so that
  *  `labconstrictor-tools support-bundle` finds QuPath runs. A record holds file paths and the values passed, never image or table contents. */
 class LcRuns {
     static final Map<String, String> STATUS = [COMPLETION: "COMPLETE", FAILURE: "FAILED", CANCELATION: "CANCELED", CRASH: "CRASHED"]   // the worker's response types as the client names them
@@ -469,19 +467,10 @@ class LcRuns {
                 results: (outputs.results ?: []).collect { r -> r.findAll { k, v -> k != "matrix_yx" } },
                 timings: outputs.timings, interpreter: outputs.diagnostics, stderr_tail: (stderr ?: "").takeRight(LcConst.RUN_STDERR_CHARS)]
             new File(folder, "run.json").setText(LcJson.pretty(content), "UTF-8")
-            prune()
             return folder
         } catch (IOException | RuntimeException e) {      // broad on purpose: whatever goes wrong here must not break the run, but its absence must be visible
             LcLog.warn("could not write the run record for " + app + " " + toolId, e)
             return null
-        }
-    }
-
-    /** Keeps the newest LcConst.RUN_RECORDS_KEPT folders named like the ones written here; anything else under runs/ is left alone. */
-    static void prune() {
-        def mine = (runsDir().listFiles({ File f -> f.isDirectory() && !Files.isSymbolicLink(f.toPath()) && f.name ==~ /^\d{8}T\d{6,12}_.*/ } as FileFilter) ?: []).sort { it.name }
-        mine.take(Math.max(0, mine.size() - LcConst.RUN_RECORDS_KEPT)).each {
-            if (!it.deleteDir()) LcLog.warn("could not remove the old run record " + it)
         }
     }
 }
@@ -1868,7 +1857,7 @@ class LcDialog {
         return f
     }
 
-    /** Results go to a new folder under <LC_HOME>/results, where the command line also puts its runs; this folder and the ones before it (by name) are kept, LcConst.RESULTS_KEPT in all. */
+    /** Results go to a new folder under <LC_HOME>/results, where the command line also puts its runs. The host never deletes a results folder: retention belongs to the Tools reference code. */
     static File newJobDir(String appName, String toolId) {
         def root = new File(LcRegistry.home(), "results")
         root.mkdirs()
@@ -1881,21 +1870,11 @@ class LcDialog {
             if (candidate.mkdir()) job = candidate          // a name that exists is never reused
         }
         if (job == null) throw new LcRefusal("could not create a results folder in " + root)
-        pruneResults(root, job)
         return job
     }
 
     /** `text` made safe for a file name: runs of other characters become "_", no leading dots, never empty (the command line's _slug). */
     static String slug(String text) { return text.replaceAll(/[^A-Za-z0-9_.-]+/, "_").replaceFirst(/^\.+/, "") ?: "x" }
-
-    /** Keeps the newest LcConst.RESULTS_KEPT result folders (`job` counts as the newest). Only folders this script or the command line creates are touched
-     *  (names `YYYYMMDDTHHMMSS_...`, never links): anything else in results/ stays. */
-    static void pruneResults(File root, File job) {
-        def mine = (root.listFiles({ File f -> f.isDirectory() && !Files.isSymbolicLink(f.toPath()) && f.name ==~ /^\d{8}T\d{6}_.*/ } as FileFilter) ?: []).findAll { it != job }.sort { it.name }
-        mine.take(Math.max(0, mine.size() - (LcConst.RESULTS_KEPT - 1))).each {
-            if (!it.deleteDir()) LcLog.warn("could not remove the old results folder " + it)
-        }
-    }
 
     /** Cancel pressed: ask the worker to stop the run. */
     void cancel() {
