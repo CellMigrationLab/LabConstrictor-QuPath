@@ -7,7 +7,7 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def FX = "/home/tester/q/fx"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -45,7 +45,7 @@ Thread.start("lc-gui-test") {
             def dir = new File("/tmp/qp_project4"); dir.deleteDir()
             qupath.lib.gui.prefs.PathPrefs.imageTypeSettingProperty().set(qupath.lib.gui.prefs.PathPrefs.ImageTypeSetting.AUTO_ESTIMATE)
             def project = qupath.lib.projects.Projects.createProject(dir, BufferedImage)
-            def server = qupath.lib.images.servers.ImageServers.buildServer("/home/user/LabConstrictor-Fiji/tests/fixtures/three_channels.tif")
+            def server = qupath.lib.images.servers.ImageServers.buildServer(FIXTURES + "/three_channels.tif")
             println "SERVER CHANNELS " + server.nChannels() + " " + server.metadata.channels.collect { it.name }
             def entry = project.addImage(server.getBuilder()); entry.setImageName("three_channels.tif")
             project.syncChanges(); qupath.setProject(project); qupath.openImageEntry(entry); entry
@@ -65,6 +65,6 @@ Thread.start("lc-gui-test") {
             expect("channel_" + (c + 1) + "_is_what_the_tool_receives", status(dlg).contains("mean=" + (10 * (c + 1))) && status(dlg).contains("shape=32 x 32"), status(dlg))
         }
         shot("qp4_2_after", dlg.stage)
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }

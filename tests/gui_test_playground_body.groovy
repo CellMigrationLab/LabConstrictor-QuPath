@@ -7,7 +7,7 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def FX = "/home/tester/q/fx"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -66,7 +66,7 @@ Thread.start("lc-gui-test") {
         println "CRASH STATUS " + status(dlg)
         expect("crash_is_explained", status(dlg).contains("crashed natively") && fx { !dlg.runButton.disable }, status(dlg))
         shot("pgq_3_crash", dlg.stage)
-        pick(dlg, A, "Stress: out of memory"); Thread.sleep(500)
+        pick(dlg, A, "Stress: out of memory (simulated)"); Thread.sleep(500)
         fx { dlg.run() }; Thread.sleep(3000); waitIdle(dlg, 120)
         println "OOM STATUS " + status(dlg)
         expect("out_of_memory_is_readable_and_worker_recovers", status(dlg).contains("MemoryError") || status(dlg).toLowerCase().contains("memory"), status(dlg))
@@ -74,6 +74,6 @@ Thread.start("lc-gui-test") {
         fx { dlg.setters["count"](200000) }
         fx { dlg.run() }; Thread.sleep(3000); waitIdle(dlg, 180)
         expect("many_points_table", status(dlg).startsWith("done"), status(dlg))
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }

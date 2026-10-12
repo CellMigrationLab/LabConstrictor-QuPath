@@ -1,0 +1,68 @@
+name: qupath-gui
+# The GUI tests (tests/gui_test_*body.groovy) in a real QuPath 0.7 on a virtual screen (Xvfb), the same way tests/run_gui_test.sh runs
+# them locally: the extension jar built from this repo is put on QuPath's class path and each body is run as QuPath's test script.
+# tests/run_gui_ci.sh runs every body, keeps a log per body and fails when any body fails. See README, "Build and test".
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 3 * * *" # nightly
+concurrency:
+  group: qupath-gui-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  # QuPath is pinned by version and checksum (a release asset never changes); the download is cached per QUPATH_VERSION.
+  QUPATH_VERSION: "0.7.0"
+  QUPATH_SHA256: 165e27a0731d58ba039e9d0d34a54acf896bb92e81922370df295cb85418ce53
+  # The Tools package comes from its main branch for now; a tag pin comes later (set TOOLS_REF to the tag, e.g. v1.0.0).
+  TOOLS_REF: main
+jobs:
+  qupath-gui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4        # QuPath 0.7 is built with Java 25; build.sh compiles the extension against its jars
+        with: { distribution: temurin, java-version: "25" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install xvfb and the libraries QuPath's JavaFX needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth libgtk-3-0t64 libxtst6 libxrender1 libxi6 libxrandr2 libgl1 libasound2t64 fonts-dejavu-core
+      - name: Cache QuPath
+        id: qupath-cache
+        uses: actions/cache@v4
+        with:
+          path: qupath-dist
+          key: qupath-${{ env.QUPATH_VERSION }}-${{ env.QUPATH_SHA256 }}
+      - name: Download and check QuPath
+        if: steps.qupath-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL --retry 5 --retry-delay 10 -o qupath.tar.xz "https://github.com/qupath/qupath/releases/download/v${QUPATH_VERSION}/QuPath-v${QUPATH_VERSION}-Linux.tar.xz"
+          echo "$QUPATH_SHA256  qupath.tar.xz" | sha256sum -c -
+          mkdir qupath-dist
+          tar -xJf qupath.tar.xz -C qupath-dist
+          rm qupath.tar.xz
+      - name: Locate QuPath and build the extension jar
+        run: |
+          test -d "$PWD/qupath-dist/QuPath/lib/app"
+          echo "QUPATH=$PWD/qupath-dist/QuPath" >> "$GITHUB_ENV"
+          QUPATH="$PWD/qupath-dist/QuPath" ./build.sh
+      - name: Register the apps the tests use (tests/ci_setup_apps.sh)
+        run: tests/ci_setup_apps.sh "${{ runner.temp }}/lc" "$TOOLS_REF"
+      - name: Run every GUI test body
+        env:
+          LC_HOME: ${{ runner.temp }}/lc/home
+          LOGS: ${{ github.workspace }}/gui-logs
+        run: tests/run_gui_ci.sh
+      - name: Upload logs and screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: qupath-gui-logs
+          path: |
+            gui-logs
+            ${{ runner.temp }}/lc/home/logs
+          if-no-files-found: ignore
+          retention-days: 14

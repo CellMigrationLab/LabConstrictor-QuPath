@@ -6,7 +6,7 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def FX = "/home/tester/q/fx"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -34,6 +34,11 @@ def waitIdle = { dlg, int seconds = 300 ->
     return false
 }
 def status = { dlg -> fx { dlg.status.text } }
+def waitUntil = { int seconds, Closure cond ->   // the choice lists load in the worker; a slow machine (CI) needs longer than a fixed sleep
+    def end = System.currentTimeMillis() + seconds * 1000
+    while (System.currentTimeMillis() < end) { if (cond()) return true; Thread.sleep(200) }
+    return false
+}
 def pick = { dlg, app, tool -> fx { dlg.appBox.value = app }; fx { dlg.toolBox.value = tool } }
 def resultStages = { Window.getWindows().findAll { it instanceof Stage && it.showing && it.title?.contains(": ") && it.title != "LabConstrictor: last run" } }
 
@@ -44,7 +49,7 @@ Thread.start("lc-gui-test") {
             def dir = new File("/tmp/qp_project3"); dir.deleteDir()
             qupath.lib.gui.prefs.PathPrefs.imageTypeSettingProperty().set(qupath.lib.gui.prefs.PathPrefs.ImageTypeSetting.AUTO_ESTIMATE)
             def project = qupath.lib.projects.Projects.createProject(dir, BufferedImage)
-            def server = qupath.lib.images.servers.ImageServers.buildServer(FX + "/reference.tif")
+            def server = qupath.lib.images.servers.ImageServers.buildServer(FIXTURES + "/reference.tif")
             def entry = project.addImage(server.getBuilder()); entry.setImageName("reference.tif")
             project.syncChanges(); qupath.setProject(project); qupath.openImageEntry(entry); entry
         }
@@ -52,6 +57,7 @@ Thread.start("lc-gui-test") {
         def dlg = fx { lcShow() }
         Thread.sleep(800)
         pick(dlg, "adv", "Pick"); Thread.sleep(3500)
+        waitUntil(60) { fx { (dlg.choiceBoxes["mode"]?.items?.size() ?: 0) >= 5000 } && LcLog.recent.any { it.contains("'b' stays a text field: ") } }
         def many = fx { dlg.choiceBoxes["mode"] }
         expect("5000_options_fill_a_dropdown", fx { many.visible && many.items.size() >= 5000 && many.items.any { it.contains("\u4e2d") } }, fx { many.items.size() })
         expect("broken_source_keeps_text_field", fx { dlg.controls["a"].visible && !dlg.choiceBoxes["a"].visible })
@@ -88,6 +94,6 @@ Thread.start("lc-gui-test") {
         def anns = fx { qupath.imageData.hierarchy.annotationObjects.collect { it.name + ":" + it.ROI.numPoints } }
         println "ANNOTATIONS " + anns
         expect("replace_leaves_one_annotation", anns.count { it.startsWith("adv:pts:") } == 1, anns)
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }
