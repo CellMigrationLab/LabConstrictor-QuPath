@@ -1,7 +1,6 @@
 # Lints the QuPath script (LabConstrictorTools.groovy) with npm-groovy-lint (CodeNarc rules); the rules are set in .groovylintrc.json.
 #
-# What this does NOT run: the GUI tests in tests/. They drive a real QuPath window (QuPath 0.7 on Java 25, a virtual display, registered
-# LabConstrictor apps), so they cannot run on a GitHub runner; run them by hand with tests/run_gui_test.sh (see README, "Build and test").
+# The GUI tests in tests/ run in their own workflow, qupath-gui.yml.
 name: lint
 
 on:

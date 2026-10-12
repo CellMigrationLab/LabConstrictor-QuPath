@@ -7,7 +7,7 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def FX = "/home/tester/q/fx"
+def FX = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // reference.tif and query.tif (the two calibrated images of the NucleiSky tests)
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()

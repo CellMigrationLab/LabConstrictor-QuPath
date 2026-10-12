@@ -8,7 +8,8 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def BLOBS = "/home/user/LabConstrictor-Fiji/tests/fixtures/blobs.tif"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
+def BLOBS = FIXTURES + "/blobs.tif"
 def PROP = "lc.qupath.max_export_pixels"
 def results = [:]
 def fx = { Closure c ->
@@ -300,6 +301,6 @@ Thread.start("lc-gui-test") {
         fx { dlg.copyAsCommand("terminal") }
         expect("copy_area_fallback_logged_once", LcLog.recent.count { it.startsWith("copy as command: the Image area") } == 1, LcLog.recent.findAll { it.contains("Image area") })
         shot("qp_area_3_end", dlg.stage)
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }

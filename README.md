@@ -105,6 +105,14 @@ Each of these is deliberate and is written once to QuPath's log (logger `labcons
 
     npx --yes npm-groovy-lint@18.0.0 --path src/main/resources/org/cellmigrationlab/labconstrictor/qupath --files "**/*.groovy" --failon info
 
-The GUI tests above are **not** run in CI: they need a real QuPath (0.7, Java 25), a virtual display and registered LabConstrictor apps, which a GitHub runner does not have. Run them by hand with `tests/run_gui_test.sh` before merging a change to the script.
+### GUI tests in CI
+
+`.github/workflows/qupath-gui.yml` (job `qupath-gui`; on every pull request, on demand and nightly) runs the GUI tests headless on Linux: it downloads QuPath 0.7.0 (pinned by version and SHA-256, cached), builds the jar from the repo with `build.sh` (Java 25), installs LabConstrictor-Tools from its `main` branch (a tag pin comes later: `TOOLS_REF` in the workflow), registers the apps with `tests/ci_setup_apps.sh` and runs every body under Xvfb through `tests/run_gui_ci.sh`, which calls `tests/run_gui_test.sh` once per body. A body fails the job when QuPath exits non-zero, a check prints `FAIL`, or the body never reaches its result line (crash or timeout, 15 minutes per body). Logs and screenshots are uploaded as the artifact `qupath-gui-logs`. Locally the same:
+
+    QUPATH=/path/to/QuPath JAVA_HOME=<JDK 25> ./build.sh
+    tests/ci_setup_apps.sh /tmp/lc main        # venvs + registry in /tmp/lc/home (needs Python 3.12; PYTHON=python3.12)
+    QUPATH=/path/to/QuPath LC_HOME=/tmp/lc/home tests/run_gui_ci.sh [body.groovy ...]
+
+Apps in CI: `interactions` (example app of labconstrictor-tools), `adv` (`tests/adversarial_app`) and the Playground (from its `main`, with CPU PyTorch). **Skipped, with the reason printed:** `gui_test_body.groovy` (NucleiSky and CellTracksColab have no LabConstrictor bridge on their `main` branch yet, so there is nothing to install; the body runs as soon as both are registered in `LC_HOME`). The sample images of the bodies are in `tests/fixtures` (`-Dlc.test.fixtures`).
 
 `tests/gui_test_body.groovy` drives the real dialog in QuPath on a virtual screen (project with two calibrated images, both apps) and writes screenshots.

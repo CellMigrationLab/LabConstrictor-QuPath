@@ -6,7 +6,7 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def FX = "/home/tester/q/fx"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -44,7 +44,7 @@ Thread.start("lc-gui-test") {
             def dir = new File("/tmp/qp_project2"); dir.deleteDir()
             qupath.lib.gui.prefs.PathPrefs.imageTypeSettingProperty().set(qupath.lib.gui.prefs.PathPrefs.ImageTypeSetting.AUTO_ESTIMATE)
             def project = qupath.lib.projects.Projects.createProject(dir, BufferedImage)
-            def server = qupath.lib.images.servers.ImageServers.buildServer(FX + "/reference.tif")
+            def server = qupath.lib.images.servers.ImageServers.buildServer(FIXTURES + "/reference.tif")
             def entry = project.addImage(server.getBuilder()); entry.setImageName("reference.tif")
             project.syncChanges(); qupath.setProject(project); qupath.openImageEntry(entry); entry
         }
@@ -84,9 +84,9 @@ Thread.start("lc-gui-test") {
         def rs3 = fx { resultStages() }
         if (rs3) shot("qp2_5_results_spots", rs3.last())
         shot("qp2_6_main", dlg.stage)
-    } catch (Throwable t) { t.printStackTrace() }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
     finally {
         println "RESULTS " + results
-        Thread.sleep(500); System.exit(0)
+        Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1)
     }
 }

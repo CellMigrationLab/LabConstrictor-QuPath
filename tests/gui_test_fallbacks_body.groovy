@@ -6,7 +6,7 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def FX = "/home/tester/q/fx"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -44,7 +44,7 @@ Thread.start("lc-gui-test") {
             def dir = new File("/tmp/qp_project_fallbacks"); dir.deleteDir()
             qupath.lib.gui.prefs.PathPrefs.imageTypeSettingProperty().set(qupath.lib.gui.prefs.PathPrefs.ImageTypeSetting.AUTO_ESTIMATE)
             def project = qupath.lib.projects.Projects.createProject(dir, BufferedImage)
-            def server = qupath.lib.images.servers.ImageServers.buildServer("/home/user/LabConstrictor-Fiji/tests/fixtures/sample.tif")
+            def server = qupath.lib.images.servers.ImageServers.buildServer(FIXTURES + "/sample.tif")
             def entry = project.addImage(server.getBuilder()); entry.setImageName("sample.tif")
             project.syncChanges(); qupath.setProject(project); qupath.openImageEntry(entry); entry
         }
@@ -75,7 +75,7 @@ Thread.start("lc-gui-test") {
 
         // points of an image that is not the open one: table only, said once in the log
         fx { dlg.imageBoxes["image"].value = LcDialog.FILE_CHOICE }
-        fx { textFieldOf("image").text = "/home/user/LabConstrictor-Fiji/tests/fixtures/sample.tif" }
+        fx { textFieldOf("image").text = FIXTURES + "/sample.tif" }
         fx { dlg.setters["threshold"](0.5d) }
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 120)
         expect("fallbacks_points_not_placed_is_logged", logged("not placed: they were not found in the image open in QuPath"), LcLog.recent)
@@ -101,6 +101,6 @@ Thread.start("lc-gui-test") {
         expect("fallbacks_unreadable_channel_file_keeps_form", fx { !dlg.channelBoxes["image"].visible && !dlg.runButton.disable })
         expect("fallbacks_unreadable_channel_file_is_logged", logged("channels of 'image' could not be read"), LcLog.recent)
         expect("fallbacks_single_channel_chooser_hidden_is_logged", logged("no channel chooser for 'image'"), LcLog.recent)
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }
