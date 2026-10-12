@@ -18,6 +18,12 @@ declare -A needs=(
   [gui_test_playground_body.groovy]="LabConstrictorPlayground"
 )
 for b in area buttons channel copy fallbacks interactions region shapes widgets; do needs[gui_test_${b}_body.groovy]="interactions"; done
+for b in parity_form parity_host parity_lifecycle parity_messages parity_pixel parity_results parity_support parity_quote; do needs[gui_test_${b}_body.groovy]="interactions"; done
+needs[gui_test_parity_cancel_body.groovy]="LabConstrictorPlayground interactions"
+# bodies that write their own registry and results (they empty LC_HOME first, so each gets a scratch LC_HOME named as the body asserts; the registered apps stay in LC_SHARED_HOME)
+declare -A scratch=([gui_test_parity_trust_body.groovy]=lhome_trust [gui_test_parity_form_body.groovy]=lhome_form [gui_test_parity_host_body.groovy]=lhome_host
+  [gui_test_parity_lifecycle_body.groovy]=lhome_life [gui_test_parity_pixel_body.groovy]=lhome_pixel [gui_test_parity_support_body.groovy]=lhome_support)
+SHARED_HOME="$LC_HOME"; export LC_SHARED_HOME="$SHARED_HOME"
 # bodies that are skipped (not failed) while their apps are not registered: the bridge of these two apps is not on their main branch yet
 optional="gui_test_body.groovy"
 skip_reason="CellTracksColab and NucleiSky have no labconstrictor_tools bridge (celltracks_lc_tools / nucleisky_lc_tools) on their main branch yet, so they cannot be installed from a release or main; register them in LC_HOME to run this body"
@@ -27,14 +33,16 @@ fail=0; rows=()
 for body in "${bodies[@]}"; do
   body=$(basename "$body"); name=${body%.groovy}; log="$LOGS/$name.log"
   missing=""
-  for app in ${needs[$body]:-}; do [ -f "$LC_HOME/apps/$app.json" ] || missing="$missing $app"; done
+  for app in ${needs[$body]:-}; do [ -f "$SHARED_HOME/apps/$app.json" ] || missing="$missing $app"; done
   if [ -n "$missing" ]; then
     if [[ " $optional " == *" $body "* ]]; then
       echo "SKIP $body: app(s) not registered:$missing. $skip_reason" | tee "$log"; rows+=("| $body | SKIPPED | $skip_reason |"); continue
     fi
-    echo "FAIL $body: app(s) not registered in $LC_HOME/apps:$missing" | tee "$log"; rows+=("| $body | FAILED | app(s) not registered:$missing |"); fail=1; continue
+    echo "FAIL $body: app(s) not registered in $SHARED_HOME/apps:$missing" | tee "$log"; rows+=("| $body | FAILED | app(s) not registered:$missing |"); fail=1; continue
   fi
   echo "=== $body"
+  export LC_HOME="$SHARED_HOME"
+  if [ -n "${scratch[$body]:-}" ]; then export LC_HOME="$LOGS/scratch/${scratch[$body]}"; mkdir -p "$LC_HOME"; fi
   BODY="$body" OUT="$LOGS/shots/$name" timeout --kill-after=30 "$TIMEOUT" tests/run_gui_test.sh > "$log" 2>&1; code=$?
   pass=$(grep -c '^PASS ' "$log"); nfail=$(grep -c '^FAIL ' "$log")
   grep -E '^(PASS|FAIL|RESULTS|SUMMARY)' "$log" | cut -c1-300

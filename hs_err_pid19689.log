@@ -1,0 +1,50 @@
+#
+# A fatal error has been detected by the Java Runtime Environment:
+#
+#  SIGSEGV (0xb) at pc=0x00007f29dc44798b, pid=19689, tid=19814
+#
+# JRE version: OpenJDK Runtime Environment Temurin-25.0.2+10 (25.0.2+10) (build 25.0.2+10-LTS)
+# Java VM: OpenJDK 64-Bit Server VM Temurin-25.0.2+10 (25.0.2+10-LTS, mixed mode, tiered, compressed oops, compressed class ptrs, g1 gc, linux-amd64)
+# Problematic frame:
+# C  [libc.so.6+0x4798b]
+#
+# No core dump will be written. Core dumps have been disabled. To enable core dumping, try "ulimit -c unlimited" before starting Java again
+#
+# If you would like to submit a bug report, please visit:
+#   https://github.com/adoptium/adoptium-support/issues
+# The crash happened outside the Java Virtual Machine in native code.
+# See problematic frame for where to report the bug.
+#
+
+---------------  S U M M A R Y ------------
+
+Command Line: -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=JKS -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=45401 -Dhttp.nonProxyHosts=localhost|127.0.0.1|::1|127.*|0.*|::|169.254.*|api.anthropic.com|api-staging.anthropic.com|api-pr-preview.anthropic.com|mcp-proxy.anthropic.com|mcp-proxy-staging.anthropic.com|registry.npmjs.org|jsr.io|npm.jsr.io|pypi.org|files.pythonhosted.org|index.crates.io|proxy.golang.org|host.docker.internal|10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*|192.168.*|100.64.0.0/10|*.svc.cluster.local|*.svc.cluster.local -Djdk.http.auth.tunneling.disabledSchemes= -Djdk.http.auth.proxying.disabledSchemes= -Djpackage.app-version=0.7.0 -XX:MaxRAMPercentage=50 --add-opens=javafx.graphics/com.sun.javafx.css=ALL-UNNAMED --enable-native-access=javafx.graphics,javafx.media,javafx.web --enable-native-access=ALL-UNNAMED --add-opens=javafx.base/com.sun.javafx.event=ALL-UNNAMED -Djpackage.app-path=/home/tester/qupath/QuPath/bin/QuPath qupath.QuPath -q -Dlc.noshow=true -Dlc.qupath.test.script=/tmp/lc_gui_test_19646.groovy -Dlc.test.out=/tmp/qp_shots
+
+Host: Intel(R) Xeon(R) Processor @ 2.80GHz, 4 cores, 13G, Ubuntu 24.04.4 LTS
+Time: Mon Oct 12 14:23:06 2026 UTC elapsed time: 898.596299 seconds (0d 0h 14m 58s)
+
+---------------  T H R E A D  ---------------
+
+Current thread (0x00007f2968279130):  JavaThread "JavaFX Application Thread"        [_thread_in_native, id=19814, stack(0x00007f29400d9000,0x00007f29401d9000) (1024K)]
+
+Stack: [0x00007f29400d9000,0x00007f29401d9000],  sp=0x00007f29401d7580,  free space=1017k
+Native frames: (J=compiled Java code, j=interpreted, Vv=VM code, C=native code)
+C  [libc.so.6+0x4798b]
+C  [libc.so.6+0x47bbe]
+C  [libX11.so.6+0x3db62]
+C  [libX11.so.6+0x40915]  _XIOError+0x75
+C  [libX11.so.6+0x44a7d]  _XEventsQueued+0x8d
+C  [libX11.so.6+0x37951]  XPending+0x61
+C  [libgdk-3.so.0+0x8facf]
+C  [libglib-2.0.so.0+0x5e207]
+C  [libglib-2.0.so.0+0xbc887]
+C  [libglib-2.0.so.0+0x5df47]  g_main_loop_run+0x127
+C  [libgtk-3.so.0+0x1febc5]  gtk_main+0x85
+C  [libglassgtk3.so+0x995d2]  Java_com_sun_glass_ui_gtk_GtkApplication__1runLoop+0x52
+j  com.sun.glass.ui.gtk.GtkApplication._runLoop(Ljava/lang/Runnable;Z)V+0
+j  com.sun.glass.ui.gtk.GtkApplication.lambda$runLoop$0(Ljava/lang/Runnable;Z)V+7
+j  com.sun.glass.ui.gtk.GtkApplication$$Lambda+0x0000000008253758.run()V+12
+j  java.lang.Thread.runWith(Ljava/lang/Object;Ljava/lang/Runnable;)V+5 java.base@25.0.2
+j  java.lang.Thread.run()V+19 java.base@25.0.2
+v  ~StubRoutines::call_stub 0x00007f29cc537fa6
+V  [libjvm.so+0xa21a20]

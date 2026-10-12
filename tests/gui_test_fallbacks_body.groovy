@@ -80,9 +80,12 @@ Thread.start("lc-gui-test") {
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 120)
         expect("fallbacks_points_not_placed_is_logged", logged("not placed: they were not found in the image open in QuPath"), LcLog.recent)
 
-        // a run that fails on the host (the file does not exist): the stack trace is in Details, the status line says why
-        fx { textFieldOf("image").text = "/tmp/qp_fallbacks_missing_file.tif" }
+        // a run that fails on the host (the interpreter of the app cannot be started; a refusal such as a missing file is a sentence, not a failure): the stack trace is in Details, the status line says why
+        fx { dlg.stopWorker(true) }
+        def realPython = fx { dlg.apps["interactions"].entry.python }
+        fx { dlg.apps["interactions"].entry.python = "/tmp/qp_fallbacks_no_such_python" }
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 120)
+        fx { dlg.apps["interactions"].entry.python = realPython }
         expect("fallbacks_host_failure_shows_in_status", status(dlg).startsWith("failed: "), status(dlg))
         expect("fallbacks_host_failure_has_trace_in_details", fx { dlg.lastReport.contains("\"trace\"") && dlg.lastReport.contains("\\tat ") }, fx { dlg.lastReport.take(400) })
         expect("fallbacks_host_failure_is_logged", logged("failed on the host"), LcLog.recent)

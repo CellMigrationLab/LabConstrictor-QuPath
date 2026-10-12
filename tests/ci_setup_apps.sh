@@ -11,15 +11,18 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TOOLS="git+https://github.com/CellMigrationLab/LabConstrictor-Tools@$REF"
 export LC_HOME="$WORK/home"; mkdir -p "$LC_HOME"
 
-"${PYTHON:-python3}" -m venv "$WORK/tools_env"
+# --copies: the interpreter of an environment is a file of its own. A link would point at the runner's shared Python (/opt/hostedtoolcache), which is
+# writable by everybody, and the registry (Tools and hosts) refuses an interpreter that is. The environments are made unwritable for group and others below.
+"${PYTHON:-python3}" -m venv --copies "$WORK/tools_env"
 "$WORK/tools_env/bin/pip" install -q --upgrade pip
 "$WORK/tools_env/bin/pip" install -q "$TOOLS" numpy pandas tifffile scipy scikit-image
 "$WORK/tools_env/bin/python" -m labconstrictor_tools register --name interactions --prefix "$WORK/tools_env" --module labconstrictor_tools.examples.interactions
 "$WORK/tools_env/bin/python" -m labconstrictor_tools register --name adv --prefix "$WORK/tools_env" --module adv_lc_tools --pythonpath "$REPO/tests/adversarial_app"
 
-"${PYTHON:-python3}" -m venv "$WORK/playground_env"
+"${PYTHON:-python3}" -m venv --copies "$WORK/playground_env"
 "$WORK/playground_env/bin/pip" install -q --upgrade pip
 "$WORK/playground_env/bin/pip" install -q torch --index-url https://download.pytorch.org/whl/cpu
 "$WORK/playground_env/bin/pip" install -q "$TOOLS" "git+https://github.com/CellMigrationLab/labconstrictor-playground@main" numpy pandas scipy matplotlib tifffile
 "$WORK/playground_env/bin/python" -m labconstrictor_tools register --name LabConstrictorPlayground --prefix "$WORK/playground_env" --module labconstrictor_playground_lc_tools
+chmod -R go-w "$WORK/tools_env" "$WORK/playground_env" "$LC_HOME"
 "$WORK/playground_env/bin/python" -m labconstrictor_tools list

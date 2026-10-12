@@ -49,16 +49,37 @@ class LcConst {
     static final long MAX_REGION_PIXELS = 100_000_000L   // pixels of the image a RegionOf selection is painted on (the label image is held in memory)
     static final long MAX_EXPORT_PIXELS = 100_000_000L   // pixels (width x height of one plane) the host exports to a tool from an image; above this the run is refused (override: system property below)
     static final String MAX_EXPORT_PROPERTY = "lc.qupath.max_export_pixels"   // system property that replaces MAX_EXPORT_PIXELS (the tests use it to trigger the guard on a small image)
+    static final long MAX_EXPORT_BYTES = 4L * 1024 * 1024 * 1024   // bytes (pixels x channels x pixel type) the host exports to a tool from an image; above this the run is refused, as Napari does (_export.MAX_EXPORT_BYTES)
+    static final String MAX_EXPORT_BYTES_PROPERTY = "lc.qupath.max_export_bytes"   // system property that replaces MAX_EXPORT_BYTES (the tests use it to trigger the guard on a small image)
     static final double FULL_RESOLUTION = 1.0d           // downsample of every export and of every offset for now (the resolution choice is a later step)
-    static final int RESULTS_KEPT = 20                   // results folders kept under <LC_HOME>/results (same as the command line, cli.RESULTS_KEPT)
-    static final int TABLE_ROWS_SHOWN = 2000             // rows of a result table put in the results window
+    static final int TABLE_ROWS_SHOWN = 100_000          // rows of a result table put in the results window (same as Napari, _results.MAX_TABLE_ROWS); a TableView draws only the rows in view
     static final int LOG_KEPT = 200                      // messages LcLog.recent keeps
+    static final String LOG_NAME = "labconstrictor.log"   // the shared log file under <LC_HOME>/logs (labconstrictor_tools.log.LOG_NAME)
+    static final long LOG_FILE_BYTES = 1_000_000L        // size of the shared log file before it rotates (log.LOG_FILE_BYTES)
+    static final int LOG_FILE_BACKUPS = 5                // rotated files kept next to the current one (log.LOG_FILE_BACKUPS)
+    static final int LOG_LEVEL_WIDTH = 7                 // level names are padded to this width, as the Python format does
+    static final int RUN_STDERR_CHARS = 4000             // the worker's last output kept in a run record (runs.STDERR_TAIL_CHARS)
     static final int STDERR_TRIM_ABOVE = 20000           // the worker's error text is cut back ...
     static final int STDERR_KEEP = 10000                 // ... to this many characters at the end once it is longer than the line above
-    static final long INT_LIMIT = 1_000_000_000L         // an integer parameter without declared limits accepts +-this
-    static final double FLOAT_LIMIT = 1e12d              // a float parameter without declared limits accepts +-this
+    static final int SIGNIFICANT_DIGITS = 6              // digits of a pixel size in the anisotropy note (the "%.6g" of the Napari note)
+    static final double SQUARE_PIXEL_TOLERANCE = 1e-3d   // Y and X pixel sizes closer than this (relative) count as square: no warning (same as Napari)
+    static final long FORM_INTEGER_LIMIT = 9_007_199_254_740_991L   // an integer parameter accepts +-(2^53 - 1) at most, declared limits or not: the largest whole number a double (JSON in a page, a slider) holds exactly (Tools notebook.MAX_FORM_INTEGER)
+    static final double FLOAT_LIMIT = 1e15d              // a float parameter without declared limits accepts +-this (the Napari rule; keeps every realistic calibration or area)
+    static final int MODE_OTHERS_WRITE = 02              // unix mode bit: writable by others (registry trust check)
+    static final int MODE_STICKY = 01000                 // unix mode bit, in a directory: only the owner of a file may replace it
+    static final List<Double> SUPPORTED_PROTOCOLS = [1d] // schema protocol versions this script understands
+    static final List<String> PARAMETER_TYPES = ["string", "integer", "float", "boolean", "choice", "image", "labels", "table", "file", "folder"]   // the parameter types of docs/PROTOCOL.md
+    static final String REFUSAL_CODE = "host_refusal"    // internal code of an LcRefusal outcome (never shown: the status line shows the sentence alone)
+    static final List<Long> NATIVE_CRASH_CODES = [-11L, 139L, 3221225477L, -1073741819L]   // segmentation fault (Linux, macOS) and the Windows access violation, unsigned (Python) and signed (Java)
+    static final int EXIT_TOOL_IMPORT_FAILED = 3         // the worker's exit code when the app's tool module cannot be imported
+    static final List<Integer> NON_PRINTABLE_TYPES = [Character.CONTROL, Character.FORMAT, Character.SURROGATE, Character.PRIVATE_USE, Character.UNASSIGNED,
+                                                      Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR, Character.SPACE_SEPARATOR].collect { it as int }   // Unicode categories Python's str.isprintable() rejects
+    static final int RESULTS_DIR_ATTEMPTS = 20           // tries to find an unused results folder name before giving up (cli.RESULTS_DIR_ATTEMPTS)
+    static final int RESULTS_DIR_RANDOM_BYTES = 3        // random part of a results folder name: six hex digits, two runs in one second never collide (cli.RESULTS_DIR_RANDOM_BYTES)
+    static final int WORKER_IDLE_SECONDS = 600           // a kept worker that is idle this long is closed (Napari: _workers.IDLE_TIMEOUT_S)
     // timeouts and delays
     static final int EXIT_WAIT_SECONDS = 2               // how long a crash text waits for the worker's exit code
+    static final int STREAM_DRAIN_MS = 2000              // how long a crash text waits for the worker's error output to be read to its end
     static final int POLL_SECONDS = 1                    // a run checks whether the worker is still alive this often
     static final int CANCEL_GRACE_SECONDS = 3            // a tool that ignores Cancel is killed after this
     static final int CLOSE_WAIT_SECONDS = 10             // a worker that ignores its closed input is killed after this
@@ -88,6 +109,13 @@ class LcConst {
     static final double LABEL_HUE_STEP = 0.61803398875d  // golden ratio: neighbouring label numbers get well separated colours in the preview
 }
 
+// ---------------------------------------------------------------------------------------------------- refusals
+/** A run the host refuses before starting any tool (no selection, no image, an area outside the image, ...). The message is the whole sentence the person
+ *  reads, the way the Napari and Fiji hosts show it: the status line shows it alone, with no class name and no "failed:". */
+class LcRefusal extends IllegalStateException {
+    LcRefusal(String sentence) { super(sentence) }
+}
+
 // ---------------------------------------------------------------------------------------------------- logging
 /** Every handler that does not rethrow says so here (QuPath's log, with the stack trace); `once` is for fallbacks that are the intended
  *  behaviour, so a form that refreshes often does not flood the log. `recent` keeps the last messages (the tests read it). */
@@ -102,13 +130,45 @@ class LcLog {
     static void warn(String text, Throwable t = null) {
         keep(t != null ? text + " [" + t.class.simpleName + ": " + t.message + "]" : text)
         if (t != null) LOG.warn("LabConstrictor: " + text, t) else LOG.warn("LabConstrictor: " + text)
+        shared("WARNING", text, t)
     }
 
     /** An intended fallback: logged the first time it happens for `key`. */
     static boolean once(String key, String text) {
         boolean first = seen.add(key)
-        if (first) { keep(text); LOG.info("LabConstrictor: " + text) }
+        if (first) { keep(text); LOG.info("LabConstrictor: " + text); shared("INFO", text, null) }
         return first
+    }
+
+    private static volatile boolean sharedFailureSaid = false
+
+    /** The shared log file every front-end writes: <LC_HOME>/logs/labconstrictor.log, in the line format of labconstrictor_tools.log
+     *  (`2026-01-31 12:00:00.123 WARNING pid=1234 qupath: text`, a stack trace on the lines after it), rotated at LcConst.LOG_FILE_BYTES with LcConst.LOG_FILE_BACKUPS
+     *  numbered backups (`.log.1` the newest), so `labconstrictor-tools logs` and `support-bundle` see QuPath runs. Never throws: a log that cannot be written is said once on stderr. */
+    static synchronized void shared(String level, String text, Throwable t) {
+        try {
+            def file = new File(LcRegistry.home(), "logs/" + LcConst.LOG_NAME)
+            file.parentFile.mkdirs()
+            rotate(file)
+            def stamp = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ROOT).format(new Date())
+            def line = stamp + " " + level.padRight(LcConst.LOG_LEVEL_WIDTH) + " pid=" + ProcessHandle.current().pid() + " qupath: " + text.replace("\r", "") + "\n"
+            file.append(line + (t != null ? trace(t) : ""), "UTF-8")
+        } catch (IOException | SecurityException e) {      // the log itself is broken (disk full, read-only home): there is nowhere else to write
+            if (!sharedFailureSaid) {
+                sharedFailureSaid = true
+                System.err.println("LabConstrictor: cannot write the log file: " + e)      // groovylint-disable-line SystemErrPrint
+            }
+        }
+    }
+
+    /** At LcConst.LOG_FILE_BYTES or more the log becomes `.log.1`, `.log.1` becomes `.log.2`, and so on; the oldest of LcConst.LOG_FILE_BACKUPS is replaced. */
+    static void rotate(File file) {
+        if (file.length() < LcConst.LOG_FILE_BYTES) return
+        for (int i = LcConst.LOG_FILE_BACKUPS - 1; i >= 1; i--) {
+            def older = new File(file.parentFile, file.name + "." + i)
+            if (older.exists()) Files.move(older.toPath(), new File(file.parentFile, file.name + "." + (i + 1)).toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+        Files.move(file.toPath(), new File(file.parentFile, file.name + ".1").toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
     }
 
     /** The stack trace of `t` as text (for the Details window). */
@@ -121,11 +181,12 @@ class LcLog {
 }
 
 // ---------------------------------------------------------------------------------------------------- JSON (QuPath ships Gson, not groovy-json)
-/** One Gson instance each for compact and pretty output; numbers come back as Double (see LcDialog.show). */
+/** One Gson instance each for compact and pretty output; whole numbers come back as Long, the others as Double (see LcDialog.show). */
 class LcJson {
-    static final Gson GSON = new GsonBuilder().serializeNulls().disableHtmlEscaping().create()
-    static final Gson PRETTY = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().create()
-    static Object parseText(String text) { GSON.fromJson(text, Object) }          // Map / List / Double / String / Boolean
+    // whole JSON numbers come back as Long and the others as Double, so a choice of integers (Literal[1, 2, 3]) goes back as 2, not 2.0 (which the worker refuses)
+    static final Gson GSON = new GsonBuilder().serializeNulls().disableHtmlEscaping().setObjectToNumberStrategy(com.google.gson.ToNumberPolicy.LONG_OR_DOUBLE).create()
+    static final Gson PRETTY = new GsonBuilder().serializeNulls().disableHtmlEscaping().setPrettyPrinting().setObjectToNumberStrategy(com.google.gson.ToNumberPolicy.LONG_OR_DOUBLE).create()
+    static Object parseText(String text) { GSON.fromJson(text, Object) }          // Map / List / Long / Double / String / Boolean
     static Object parse(File file) { parseText(file.getText("UTF-8")) }
     static String toJson(Object o) { GSON.toJson(o) }
     static String pretty(Object o) { PRETTY.toJson(o) }
@@ -167,6 +228,20 @@ class LcArea {
         return (x1 <= x0 || y1 <= y0) ? null : [kind: kind, x0: x0, y0: y0, width: x1 - x0, height: y1 - y0, downsample: LcConst.FULL_RESOLUTION, z: z, t: t]
     }
 
+    /** The export budget in bytes: LcConst.MAX_EXPORT_BYTES, or the system property when it holds a positive whole number (anything else is logged once and ignored). */
+    static long byteBudget() {
+        def text = System.getProperty(LcConst.MAX_EXPORT_BYTES_PROPERTY)
+        if (!text) return LcConst.MAX_EXPORT_BYTES
+        try {
+            long value = Long.parseLong(text.trim())
+            if (value > 0) return value
+        } catch (NumberFormatException e) {
+            LcLog.once("bytes-text:" + text, "system property " + LcConst.MAX_EXPORT_BYTES_PROPERTY + " = '" + text + "' is not a whole number (" + e.message + ")")
+        }
+        LcLog.once("bytes:" + text, "system property " + LcConst.MAX_EXPORT_BYTES_PROPERTY + " = '" + text + "' is ignored: the default of " + LcConst.MAX_EXPORT_BYTES + " bytes is used")
+        return LcConst.MAX_EXPORT_BYTES
+    }
+
     static long pixels(Map area) { return (long) area.width * (long) area.height }
 
     /** The region of the server the export reads. */
@@ -197,11 +272,16 @@ class LcRegistry {
     /** Variables removed from the worker's environment so the app's own Python is not mixed with QuPath's or the user's. */
     static final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH", "PYTHONPATH"]
 
+    /** The LabConstrictor home: $LC_HOME, else ~/.labconstrictor (registry, results, run records and the shared log live under it). */
+    static File home() {
+        def env = System.getenv()
+        return env.LC_HOME ? new File(env.LC_HOME) : new File(System.getProperty("user.home"), ".labconstrictor")
+    }
+
     /** Folders searched for app registry files, in priority order: $LC_HOME/apps (default ~/.labconstrictor/apps), $LC_APPS_PATH, then the machine-wide folder. */
     static List<File> searchPath() {
         def env = System.getenv()
-        def home = env.LC_HOME ? new File(env.LC_HOME) : new File(System.getProperty("user.home"), ".labconstrictor")
-        def dirs = [new File(home, "apps")]
+        def dirs = [new File(home(), "apps")]
         if (env.LC_APPS_PATH) env.LC_APPS_PATH.split(File.pathSeparator).findAll { it }.each { dirs << new File(it) }
         def os = System.getProperty("os.name").toLowerCase()
         if (os.contains("win")) dirs << new File(env.ProgramData ?: "C:\\ProgramData", "LabConstrictor\\apps")
@@ -210,37 +290,188 @@ class LcRegistry {
         return dirs
     }
 
+    /** Identifiers that become file names (app, tool and parameter names): the same plain-name rule as the Python registry (and the Fiji script). */
+    static boolean plainName(def text) {
+        return text instanceof String && text && text != "." && text != ".." && !text.any { it in ["/", "\\", "\0"] } && text == text.trim()
+    }
+
+    /** A Python identifier: parameter names must pass this before they become file names or form rows. */
+    static boolean identifier(def text) { return text instanceof String && (text ==~ /[A-Za-z_][A-Za-z0-9_]*/) }
+
+    /** A tool id from the schema (it becomes part of the `lc:<id>` task name and of result folder names). */
+    static boolean toolId(def text) { return text instanceof String && (text ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/) }
+
+    /** False on Windows, where the owner / mode checks of the trust rules cannot be made. */
+    static boolean isPosixHost() { return !System.getProperty("os.name").toLowerCase().contains("win") }
+
+    /** Unix permission bits of `path`, or null where the file system has no such notion (logged: the permission checks then do not apply to it). */
+    static Integer unixMode(java.nio.file.Path path) {
+        try { return Files.getAttribute(path, "unix:mode") as Integer }
+        catch (UnsupportedOperationException | IllegalArgumentException problem) {
+            LcLog.warn("no unix permission bits for " + path + ": the permission checks do not apply to it", problem)
+            return null
+        }
+    }
+
+    /** Writable by everybody (a directory with the sticky bit, like /tmp, only lets owners replace their own files). */
+    static boolean worldWritable(File file, boolean directory) {
+        def path = file.toPath()
+        def mode = unixMode(path)
+        if (mode == null) return Files.getPosixFilePermissions(path).contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE)
+        return (mode & LcConst.MODE_OTHERS_WRITE) != 0 && !(directory && (mode & LcConst.MODE_STICKY) != 0)
+    }
+
+    /** Ownership and permission policy for a file read to decide what to start (same as the Python registry's _file_reason). */
+    static String fileReason(File file, boolean userDir, String what) {
+        def path = file.toPath()
+        def owner = Files.getOwner(path).name
+        // per-user entries must be ours; entries in shared folders (LC_APPS_PATH, /etc) may also belong to root (the administrator)
+        if (owner != System.getProperty("user.name") && !(owner == "root" && !userDir))
+            return what + " is not owned by the current user" + (userDir ? "" : " or root")
+        def permissions = Files.getPosixFilePermissions(path)
+        if (permissions.contains(java.nio.file.attribute.PosixFilePermission.GROUP_WRITE) || permissions.contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE))
+            return what + " is writable by other users"
+        return null
+    }
+
+    /** The files and folders whose replacement would run code as this user at the next start: [file, is a folder, name]. */
+    private static List executableParts(java.nio.file.Path python, java.nio.file.Path prefix) {
+        return [[python.toFile(), false, "interpreter"], [python.parent.toFile(), true, "interpreter folder"], [prefix.toFile(), true, "install prefix"]]
+    }
+
+    /** Owner and permissions of the entry file, the schema file next to it, and the interpreter with its folders; null when all pass. */
+    private static String permissionReason(File entryFile, Map entry, boolean userDir, java.nio.file.Path python, java.nio.file.Path prefix) {
+        def reason = fileReason(entryFile, userDir, "entry file")
+        if (reason) return reason
+        def schemaFile = new File(entry.schema_path as String).absoluteFile
+        if (schemaFile.parentFile.toPath().normalize() != entryFile.absoluteFile.parentFile.toPath().normalize())
+            return "schema file " + entry.schema_path + " is not in the same folder as the entry"
+        if (schemaFile.exists()) {                                       // a missing schema is reported later, with its own message
+            reason = fileReason(schemaFile, userDir, "schema file")
+            if (reason) return reason
+        }
+        for (item in executableParts(python, prefix)) {
+            if (item[0].exists() && worldWritable(item[0] as File, item[1] as boolean)) return item[2] + " " + item[0] + " is writable by everybody"
+        }
+        return null
+    }
+
+    /** Why an entry must not be used to start a process, or null. Fails closed: a check that cannot be made is a reason (same rules as the Fiji script). */
+    static String untrustedReason(File entryFile, Map entry, boolean userDir) {
+        try {
+            // lexical containment (symlinks inside the prefix are normal: a venv's python links to the base interpreter)
+            def python = new File(entry.python as String).absoluteFile.toPath().normalize(), prefix = new File(entry.prefix as String).absoluteFile.toPath().normalize()
+            if (!python.startsWith(prefix)) return "interpreter " + entry.python + " is not inside the install prefix " + entry.prefix
+            if (prefix.parent == null) return "the install prefix " + prefix + " is a filesystem root"
+            if (!isPosixHost()) return null                              // Windows: no POSIX ownership/mode to check (known, not an error)
+            try { Files.getPosixFilePermissions(entryFile.toPath()) }
+            catch (UnsupportedOperationException problem) {              // a file system without POSIX permissions (known): the entry cannot be checked
+                LcLog.warn("the registry entry " + entryFile + " is not checked for permissions: its file system has no POSIX permissions", problem)
+                return null
+            }
+            return permissionReason(entryFile, entry, userDir, python, prefix)
+        } catch (Exception problem) {      // broad on purpose: a check that cannot be made refuses the entry (fails closed)
+            LcLog.warn("cannot verify the registry entry " + entryFile, problem)
+            return "cannot verify the registry entry permissions (" + problem + ")"
+        }
+    }
+
+    /** The registry entry is untrusted JSON: check its shape before any field is used (same rules as the Python registry's _validated_entry). */
+    static String entryProblem(def entry) {
+        if (!(entry instanceof Map)) return "the entry is not a JSON object"
+        for (key in ["name", "python", "prefix", "module", "schema_path"])
+            if (!(entry[key] instanceof String) || !entry[key]) return "field '" + key + "' must be a non-empty string"
+        if (!plainName(entry.name)) return "invalid app name '" + entry.name + "': it must be a plain name without path separators"
+        if (entry.pythonpath != null && !(entry.pythonpath instanceof List && entry.pythonpath.every { it instanceof String }))
+            return "field 'pythonpath' must be a list of strings"
+        return (entry.runtime_path != null && !(entry.runtime_path instanceof String)) ? "field 'runtime_path' must be a string" : null
+    }
+
+    /** The cached schema is untrusted JSON too: shape, plus the names that later become file names. */
+    static String schemaProblem(def schema) {
+        if (!(schema instanceof Map)) return "schema is not a JSON object"
+        if (!(schema.protocol instanceof Number) || !LcConst.SUPPORTED_PROTOCOLS.any { it == (schema.protocol as double) })
+            return "schema protocol " + schema.protocol + " is not supported (this host speaks " + LcConst.SUPPORTED_PROTOCOLS.collect { it as long } + ")"      // the Tools wording (registry._validated_schema)
+        if (!(schema.tools instanceof List)) return "schema has no list of tools"
+        for (tool in schema.tools) {
+            if (!(tool instanceof Map) || !(tool.label instanceof String) || !toolId(tool.id) || !(tool.inputs instanceof List) || !(tool.outputs instanceof List))
+                return "a tool has an unexpected structure (needs a plain id, a text label, inputs and outputs lists)"
+            for (p in tool.inputs) {
+                if (!(p instanceof Map) || !identifier(p.name) || !(p.label instanceof String))
+                    return "tool '" + tool.id + "' has a parameter without an identifier name and a text label"
+            }
+        }
+        return null
+    }
+
+    /** One registry file: [app: [entry, schema]] when it passes every check, else [problem: "name: reason"]; a file that cannot be read is a problem too. */
+    private static Map loadFile(File file, boolean userDir) {
+        def entry = LcJson.parse(file)
+        def malformed = entryProblem(entry)
+        if (malformed) return [problem: file.name + ": " + malformed]
+        if (!new File(entry.python as String).exists())
+            return [problem: entry.name + ": not available on this machine (interpreter " + entry.python + " is missing)", name: entry.name]
+        def reason = untrustedReason(file, entry as Map, userDir)
+        if (reason) return [problem: entry.name + ": ignored: " + reason, name: entry.name]
+        def schema = LcJson.parse(new File(entry.schema_path as String))
+        def badSchema = schemaProblem(schema)
+        return badSchema ? [problem: file.name + ": " + badSchema] : [app: [entry: entry, schema: schema], name: entry.name]
+    }
+
     /** @return [apps: LinkedHashMap name -> [entry: Map, schema: Map], problems: List of "name: reason"] */
     static Map load() {
-        def apps = new LinkedHashMap(), problems = []
-        for (dir in searchPath()) {
-            if (!dir.isDirectory()) continue
+        def apps = new LinkedHashMap(), problems = [], skip = [] as Set
+        searchPath().eachWithIndex { File dir, int index ->
+            if (!dir.isDirectory()) return
             def files = (dir.listFiles({ File f -> f.name.endsWith(".json") && !f.name.endsWith(".schema.json") } as FileFilter) ?: []).sort { it.name }
             for (file in files) {
                 def name = file.name.replaceAll(/\.json$/, "")
-                if (apps.containsKey(name)) continue // the first folder in the search order wins
+                if (apps.containsKey(name) || skip.contains(name)) continue // the first folder in the search order wins
                 try {
-                    def entry = LcJson.parse(file)
-                    if (!new File(entry.python as String).isFile()) throw new IllegalStateException("interpreter not found: " + entry.python)
-                    // lexical check (path text, links are not followed): a venv's interpreter is a link to a Python outside the prefix
-                    def prefix = new File(entry.prefix as String).toPath().toAbsolutePath().normalize()
-                    if (!new File(entry.python as String).toPath().toAbsolutePath().normalize().startsWith(prefix))
-                        throw new IllegalStateException("interpreter is not inside the app's prefix")
-                    if (file.toPath().getFileSystem().supportedFileAttributeViews().contains("posix")) {
-                        def perms = Files.getPosixFilePermissions(file.toPath())
-                        if (perms.any { it.name() in ["GROUP_WRITE", "OTHERS_WRITE"] })
-                            throw new IllegalStateException("registry file is writable by others")
-                    }
-                    def schema = LcJson.parse(new File(entry.schema_path as String))
-                    if ((schema.protocol as double) != 1d) throw new IllegalStateException("unsupported protocol " + schema.protocol)
-                    apps[name] = [entry: entry, schema: schema]
-                } catch (Exception e) {     // broad on purpose: any broken registry entry (I/O, JSON, checks above) is one listed problem, never a failed start
+                    def found = loadFile(file, index == 0)
+                    if (found.problem) { problems << found.problem; skip << (found.name ?: name); continue }
+                    if (apps.containsKey(found.name) || skip.contains(found.name)) continue    // the file name differs from the app name it claims: priority stays with the earlier folder
+                    apps[found.name] = found.app
+                } catch (Exception e) {     // broad on purpose: any broken registry entry (I/O, JSON) is one listed problem, never a failed start
                     LcLog.warn("registry entry '" + name + "' skipped", e)
-                    problems << (name + ": " + e.message)
+                    problems << (file.name + ": " + e.message)
                 }
             }
         }
-        return [apps: apps, problems: problems]
+        return [apps: new LinkedHashMap(apps.sort { it.key }), problems: problems]      // sorted by name, as Napari and the command line list them
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------- run records
+/** One folder per run under <LC_HOME>/runs with a run.json, in the format of labconstrictor_tools.runs (a host never deletes a record: retention belongs to the Tools reference code), so that
+ *  `labconstrictor-tools support-bundle` finds QuPath runs. A record holds file paths and the values passed, never image or table contents. */
+class LcRuns {
+    static final Map<String, String> STATUS = [COMPLETION: "COMPLETE", FAILURE: "FAILED", CANCELATION: "CANCELED", CRASH: "CRASHED"]   // the worker's response types as the client names them
+
+    static File runsDir() { return new File(LcRegistry.home(), "runs") }
+
+    /** Writes the record of one finished run and returns its folder, or null (said in the log) when it cannot be written: a record never breaks a run.
+     *  `run` holds entry (the registry entry of the app), app, tool, inputs, outcome (the worker's last message), seconds and stderr (the worker's output). */
+    static File record(Map run) {
+        def (entry, app, toolId, inputs, outcome, seconds, stderr) = [run.entry, run.app as String, run.tool as String, run.inputs as Map, run.outcome as Map, run.seconds as double, run.stderr as String]
+        try {
+            def now = java.time.Instant.now()
+            def stamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssSSSSSS").withZone(java.time.ZoneOffset.UTC).format(now)
+            def folder = new File(runsDir(), stamp + "_" + LcDialog.slug(app) + "_" + LcDialog.slug(toolId))
+            folder.mkdirs()
+            def outputs = outcome.outputs instanceof Map ? outcome.outputs : [:]
+            def content = [
+                app: app, app_version: entry.version, tool: toolId, host: "qupath", finished_utc: now.toString(), seconds: Math.round(seconds * 100) / 100d,
+                status: STATUS[outcome.responseType] ?: outcome.responseType, error: outcome.error, code: outcome.code, traceback: outcome.trace ?: outcome.traceback,
+                inputs: inputs.findAll { k, v -> k != "_job_dir" },      // the host-owned folder is not a user input
+                results: (outputs.results ?: []).collect { r -> r.findAll { k, v -> k != "matrix_yx" } },
+                timings: outputs.timings, interpreter: outputs.diagnostics, stderr_tail: (stderr ?: "").takeRight(LcConst.RUN_STDERR_CHARS)]
+            new File(folder, "run.json").setText(LcJson.pretty(content), "UTF-8")
+            return folder
+        } catch (IOException | RuntimeException e) {      // broad on purpose: whatever goes wrong here must not break the run, but its absence must be visible
+            LcLog.warn("could not write the run record for " + app + " " + toolId, e)
+            return null
+        }
     }
 }
 
@@ -251,6 +482,8 @@ class LcWorker {
     final Map<String, BlockingQueue<Map>> tasks = new java.util.concurrent.ConcurrentHashMap<>()
     final StringBuffer stderrTail = new StringBuffer()
     volatile boolean closed = false
+    Thread stderrReader                                 // reads the worker's error output; a crash text waits for it to finish so the worker's last words are not missed
+    volatile boolean killedAfterCancel = false          // the person pressed Cancel and the tool did not stop: the worker was ended by the host, not by a fault
     private int counter = 0
 
     LcWorker(Map entry) {
@@ -285,7 +518,7 @@ class LcWorker {
             }
             tasks.values().each { it.put([responseType: "CRASH", error: crashText()]) }
         }
-        Thread.start("lc-stderr") {
+        stderrReader = Thread.start("lc-stderr") {
             try {
                 proc.errorStream.withReader("UTF-8") { r -> char[] buf = new char[2048]; int n; while ((n = r.read(buf)) > 0) { stderrTail.append(buf, 0, n); if (stderrTail.length() > LcConst.STDERR_TRIM_ABOVE) stderrTail.delete(0, stderrTail.length() - LcConst.STDERR_KEEP) } }
             } catch (IOException e) {      // same as above, for the error stream
@@ -297,16 +530,25 @@ class LcWorker {
     /** The worker's last error output (trimmed to the end when it grows too long, see LcConst.STDERR_*). */
     String stderrText() { stderrTail.toString() }
 
-    /** What to tell the person when the worker ends without answering: the likely cause from the exit code (wording close to the Fiji host's), then the worker's own last words. */
+    /** The likely cause of a worker that died on its own: the sentences of labconstrictor_tools.log.hint_for_exit, rule for rule (a missing package first, then the exit
+     *  code; Windows reports the access violation unsigned in Python and signed in Java, so both forms are listed). A worker with no known cause gets a plain sentence. */
+    static String hintForExit(Integer code, String stderrTail) {
+        def text = stderrTail ?: ""
+        if (text.contains("ModuleNotFoundError") || text.contains("ImportError")) return "a Python package is missing or broken in the app's environment (see the traceback above)"
+        if (code in [-9, 137]) return "the worker was killed (out of memory? the OS OOM killer ends big image jobs this way)"
+        if ((code as Long) in LcConst.NATIVE_CRASH_CODES) return "the worker crashed natively (segmentation fault in a compiled library)"
+        return code == LcConst.EXIT_TOOL_IMPORT_FAILED ? "the app's tool module failed to import (see the traceback above)" : "the worker process stopped unexpectedly"
+    }
+
+    /** What to tell the person when the worker ends without answering: the likely cause (hintForExit), the exit code, then the worker's own last words. */
     String crashText() {
         Integer code = null
-        try { if (proc.waitFor(LcConst.EXIT_WAIT_SECONDS, TimeUnit.SECONDS)) code = proc.exitValue() } catch (InterruptedException e) { Thread.currentThread().interrupt(); LcLog.warn("interrupted while waiting for the worker's exit code", e) }
-        def hint = code in [-9, 137] ? "The worker was killed (out of memory? the OS ends big image jobs this way)."
-                 : code in [-11, 139, -1073741819] ? "The worker crashed natively (segmentation fault in a compiled library)."
-                 : code == 3 ? "The app's tool module failed to import (see the output below)."
-                 : "The worker process stopped unexpectedly."
+        try {
+            if (proc.waitFor(LcConst.EXIT_WAIT_SECONDS, TimeUnit.SECONDS)) code = proc.exitValue()
+            if (code != null && Thread.currentThread() != stderrReader) stderrReader?.join(LcConst.STREAM_DRAIN_MS)      // the process is gone: its last output is still being read
+        } catch (InterruptedException e) { Thread.currentThread().interrupt(); LcLog.warn("interrupted while waiting for the worker's exit code", e) }
         def tail = stderrText().takeRight(LcConst.CRASH_TAIL_CHARS).trim()
-        return hint + (code != null ? " (exit code " + code + ")" : "") + (tail ? " " + tail : "")
+        return hintForExit(code, tail) + (code != null ? " (exit code " + code + ")" : "") + (tail ? ". " + tail : "")
     }
 
     /** Sends one EXECUTE and blocks until its terminal message; `onUpdate` gets (message, current, maximum). */
@@ -319,12 +561,12 @@ class LcWorker {
             while (true) {
                 def msg = queue.poll(LcConst.POLL_SECONDS, TimeUnit.SECONDS)
                 if (msg == null) {
-                    if (!proc.isAlive()) return [responseType: "CRASH", error: crashText()]
+                    if (!proc.isAlive()) return endOfRun([responseType: "CRASH", error: crashText()])
                     continue
                 }
                 def type = msg.responseType
                 if (type == "UPDATE") onUpdate?.call(msg.message, msg.current, msg.maximum)
-                else if (type in ["COMPLETION", "FAILURE", "CANCELATION", "CRASH"]) return msg
+                else if (type in ["COMPLETION", "FAILURE", "CANCELATION", "CRASH"]) return endOfRun(msg)
             }
         } finally {
             tasks.remove(id)
@@ -332,6 +574,11 @@ class LcWorker {
         }
     }
     volatile String currentTask = null      // id of the run in progress (cancel targets it)
+
+    /** The terminal message of a run; a worker that ended after Cancel was pressed is a cancellation (the person asked for it), never a crash text that reads like out-of-memory. */
+    private Map endOfRun(Map msg) {
+        return (msg.responseType == "CRASH" && killedAfterCancel) ? [responseType: "CANCELATION", workerStopped: true] : msg
+    }
 
     /** Writes one JSON line to the worker; synchronized so lines from the run and cancel threads never interleave. */
     private synchronized void send(Map message) {
@@ -348,7 +595,7 @@ class LcWorker {
         try { send([task: id, requestType: "CANCEL"]) } catch (IOException e) { LcLog.warn("could not send the cancel request (the worker is killed after " + graceSeconds + " s)", e) }
         Thread.start("lc-cancel") {
             Thread.sleep(graceSeconds * 1000L)
-            if (currentTask == id) kill()
+            if (currentTask == id) { killedAfterCancel = true; kill() }
         }
     }
 
@@ -367,11 +614,34 @@ class LcWorker {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------- whole-number box
+/** The value factory of an integer box. JavaFX's own IntegerSpinnerValueFactory stops at 2^31 - 1; this one holds any whole number between `min` and `max`
+ *  (up to +-LcConst.FORM_INTEGER_LIMIT). A typed number outside the range is put at the nearest limit (a GUI holds the value inside the range); text that is not a whole number
+ *  is a NumberFormatException, which LcDialog.commitSpinner reports. */
+class LcLongValueFactory extends SpinnerValueFactory<Long> {
+    final long min
+    final long max
+
+    LcLongValueFactory(long min, long max, long initial) {
+        this.min = min
+        this.max = max
+        setConverter(new javafx.util.StringConverter<Long>() {
+            String toString(Long value) { return value == null ? "" : value.toString() }
+            Long fromString(String text) { return Math.max(min, Math.min(max, Long.parseLong(text.trim()))) }
+        })
+        setValue(Math.max(min, Math.min(max, initial)))
+    }
+
+    void decrement(int steps) { setValue(Math.max(min, getValue() - steps)) }      // getValue(): inside this class `value` is the factory's private field, not the number
+
+    void increment(int steps) { setValue(Math.min(max, getValue() + steps)) }
+}
+
 // ---------------------------------------------------------------------------------------------------- the dialog (the form, the request, running, results, copy as command)
 /** The tools dialog. State (maps of controls, getters, setters) is rebuilt for every tool; the tests read some of it. */
 class LcDialog {
     // ---- helpers and state
-    /** Gson reads every JSON number as a Double: show whole numbers without ".0". */
+    /** A whole JSON number is a Long, a decimal one a Double: whole Doubles (3.0) are shown without ".0" too. */
     static String show(Object v) {
         if (v instanceof Double && Double.isFinite(v) && v == Math.rint(v) && Math.abs(v) < 1e15) return String.valueOf(v.longValue())
         if (v instanceof List) return "[" + v.collect { show(it) }.join(", ") + "]"
@@ -399,6 +669,8 @@ class LcDialog {
     Map<String, ComboBox<String>> choiceBoxes = [:]   // ChoicesFrom: the dropdown beside the text field
     Map<String, Integer> choiceSeq = [:]          // newest question per parameter: older answers are dropped
     PauseTransition choiceTimer = new PauseTransition(Duration.millis(LcConst.CHOICES_DEBOUNCE_MS))
+    int idleSeconds = LcConst.WORKER_IDLE_SECONDS      // a kept worker that was not used for this long is closed (Napari keeps it for 10 minutes)
+    PauseTransition idleTimer = new PauseTransition(Duration.seconds(LcConst.WORKER_IDLE_SECONDS))
     Label messageLabel = new Label()              // message results of the last run
     Map<String, Stage> resultWindows = [:]        // app/tool -> its last results window (Replace reuses it)
     Map<String, String> imageChoiceAtRun = [:]    // image parameter -> what was chosen when the run started
@@ -409,6 +681,8 @@ class LcDialog {
     Map<String, ComboBox<String>> areaBoxes = [:]     // Image area: the area chooser of each image / labels parameter
     volatile Map<String, Map> areasAtRun = [:]        // image parameter -> its area in the run in progress (only parameters with an area other than the whole image)
     Map<String, String> imageOf = [:]            // pixel-size parameter -> image parameter
+    Map<String, Double> autoPixel = [:]          // pixel-size parameter -> the value the host last wrote (a different value in the box was typed by the person)
+    Map<String, TextField> fileFields = [:]      // image parameter -> the field for a file path
     LcWorker worker
     String workerApp
     volatile boolean running = false
@@ -464,6 +738,7 @@ class LcDialog {
         messageLabel.visible = false
         messageLabel.managed = false
         choiceTimer.onFinished = { resolveChoices() }
+        idleTimer.onFinished = { closeIdleWorker() }
     }
 
     /** The scrolling area that holds the generated form. */
@@ -510,19 +785,40 @@ class LcDialog {
     /** A new app was chosen: list its tools. */
     void onApp() {
         def app = apps[appBox.value]
-        toolBox.items.setAll(app ? app.schema.tools.collect { it.label } : [])
+        toolBox.items.setAll(app ? toolNames(app.schema.tools).keySet() : [])
         if (!toolBox.items.isEmpty()) toolBox.value = toolBox.items.first()
+    }
+
+    /** [name shown in the chooser: tool]: the label, or `label (id)` when two tools share a label (never pick the wrong one; the Napari rule). */
+    static Map<String, Map> toolNames(List tools) {
+        def labels = tools.collect { it.label }
+        def names = new LinkedHashMap<String, Map>()
+        tools.each { names[labels.count(it.label) == 1 ? it.label as String : it.label + " (" + it.id + ")"] = it }
+        return names
+    }
+
+    /** The first parameter of a tool whose type this host does not know, as a sentence; null when every type is supported. */
+    static String unsupportedParameter(Map tool) {
+        def p = tool.inputs.find { !(it.type in LcConst.PARAMETER_TYPES) }
+        return p == null ? null : "parameter '" + p.name + "' has the unknown type '" + p.type + "'"
     }
 
     /** A new tool was chosen: forget the old form's controls and build the new form. */
     void onTool() {
         def app = apps[appBox.value]
-        currentTool = app?.schema?.tools?.find { it.label == toolBox.value }
+        currentTool = app ? toolNames(app.schema.tools)[toolBox.value] : null
         formBox.children.clear()
-        getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); areaBoxes.clear(); imageOf.clear(); selectionBoxes.clear()
+        getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); areaBoxes.clear(); imageOf.clear(); selectionBoxes.clear(); autoPixel.clear(); fileFields.clear()
         checks.clear(); choiceBoxes.clear(); choiceSeq.clear(); channelBoxes.clear()
         description.text = currentTool?.description ?: ""
         if (currentTool == null) return
+        def unsupported = unsupportedParameter(currentTool)
+        if (!running) runButton.disable = unsupported != null
+        if (unsupported != null) {      // that tool only (the others of the app stay usable), and no guessed form: the Napari rule
+            LcLog.warn("cannot build the form for " + currentTool.id + ": " + unsupported)
+            status.text = "this tool cannot be shown: " + unsupported
+            return
+        }
         buildForm(currentTool.inputs)
         hookChoices()
         scheduleChoices(0)
@@ -622,13 +918,13 @@ class LcDialog {
         combo.visible = true; combo.managed = true
     }
 
-    /** ClearAfterRun parameters go back to their default (or unset) after a successful run. */
+    /** ClearAfterRun parameters of every type go back to their default (a text to ""; an optional one without default to unset) after a successful run (the Napari rule). */
     void clearAfterRun() {
         currentTool.inputs.findAll { it.clear_after_run }.each { p ->
             checks[p.name]?.selected = false
             choiceBoxes[p.name]?.value = ""
-            def control = controls[p.name]
-            if (control instanceof TextField) control.text = p.default != null ? p.default.toString() : ""
+            def start = p.default != null ? p.default : (p.type == "string" ? "" : null)
+            if (start != null && p.type != "image" && p.type != "labels") setters[p.name](start)
         }
     }
 
@@ -654,19 +950,9 @@ class LcDialog {
     /** Rows for the normal parameters, one collapsed section per Collapsed group, one for Advanced; then the links between parameters. */
     void buildForm(List inputs) {
         def sources = imageSources()
-        def shown = inputs.findAll { !it.advanced }, advanced = inputs.findAll { it.advanced }
-        def folded = shown.findAll { it.group_collapsed }.groupBy { it.group }          // accordion sections (Collapsed)
-        def normal = shown.findAll { !it.group_collapsed }
-        def grid = newGrid()
-        addRows(grid, normal, sources)
-        formBox.children.add(grid)
-        folded.each { group, params ->
-            def foldedGrid = newGrid()
-            addRows(foldedGrid, params.collect { it + [group: null] }, sources)
-            def section = new TitledPane(group as String, foldedGrid)
-            section.expanded = false
-            formBox.children.add(section)
-        }
+        def ordered = presentationOrder(inputs)
+        def shown = ordered.findAll { !it.advanced }, advanced = ordered.findAll { it.advanced }
+        addSections(shown, sources)
         if (advanced) {
             def advGrid = newGrid()
             addRows(advGrid, advanced, sources)
@@ -678,6 +964,39 @@ class LcDialog {
         inputs.findAll { it.pixel_size_of }.each { p -> hookPixelSize(p) }
         inputs.findAll { it.enabled_when }.each { p -> hookEnabled(p) }
         inputs.findAll { it.pixel_size_of }.each { p -> fillPixelSize(p) }
+    }
+
+    /** Inputs in the order the form shows them: the parameters of a `group` together (where the group first appears), `advanced` ones after all the others.
+     *  Without group/advanced hints the order is unchanged. The same rule as the Napari form (presentation_order) and the Fiji dialog (presentationOrder). */
+    static List presentationOrder(List inputs) {
+        if (!inputs.any { it.group || it.advanced }) return inputs
+        def first = [:]                                           // [advanced?, group] -> index where the group first appears
+        inputs.eachWithIndex { p, i -> if (p.group) first.putIfAbsent([p.advanced ? 1 : 0, p.group], i) }
+        def keyOf = { p, i -> [p.advanced ? 1 : 0, p.group ? first[[p.advanced ? 1 : 0, p.group]] : i, i] }
+        def keyed = inputs.withIndex().collect { p, i -> [p, keyOf(p, i)] }
+        return keyed.sort(false) { a, b -> a[1][0] <=> b[1][0] ?: a[1][1] <=> b[1][1] ?: a[1][2] <=> b[1][2] }.collect { it[0] }
+    }
+
+    /** The ordered, non-advanced inputs as form sections: consecutive normal parameters share a grid, a Collapsed group is a folded section where it first appears. */
+    void addSections(List shown, Map sources) {
+        def run = []
+        def flush = {
+            if (run) { def grid = newGrid(); addRows(grid, run, sources); formBox.children.add(grid); run = [] }
+        }
+        def i = 0
+        while (i < shown.size()) {
+            def p = shown[i]
+            if (!p.group_collapsed) { run << p; i++; continue }
+            flush()
+            def members = shown.drop(i).takeWhile { it.group_collapsed && it.group == p.group }
+            def foldedGrid = newGrid()
+            addRows(foldedGrid, members.collect { it + [group: null] }, sources)
+            def section = new TitledPane(p.group as String, foldedGrid)
+            section.expanded = false
+            formBox.children.add(section)
+            i += members.size()
+        }
+        flush()
     }
 
     /** A two-column grid (label, control) with the form's spacing. */
@@ -789,18 +1108,18 @@ class LcDialog {
         return new HBox(12, *buttons, box)
     }
 
-    /** A spinner (optionally with a slider); with no declared limits it accepts +-LcConst.INT_LIMIT. */
+    /** A spinner (optionally with a slider) of whole numbers; with no declared limits it accepts +-LcConst.FORM_INTEGER_LIMIT, and a declared bound beyond that is cut to it. */
     Map integerControl(Map p) {
-        def lo = p.minimum != null ? (p.minimum as double).longValue() : -LcConst.INT_LIMIT
-        def hi = p.maximum != null ? (p.maximum as double).longValue() : LcConst.INT_LIMIT
-        def initial = p.default != null ? (p.default as double).longValue() : Math.max(lo, Math.min(hi, 0L))
-        def spinner = new Spinner<Integer>(lo as int, hi as int, initial as int)
+        long lo = p.minimum != null ? Math.max((p.minimum as Number).longValue(), -LcConst.FORM_INTEGER_LIMIT) : -LcConst.FORM_INTEGER_LIMIT      // Number.longValue() saturates, so a huge bound is cut, never wrapped
+        long hi = p.maximum != null ? Math.min((p.maximum as Number).longValue(), LcConst.FORM_INTEGER_LIMIT) : LcConst.FORM_INTEGER_LIMIT
+        long initial = p.default != null ? (p.default as Number).longValue() : Math.max(lo, Math.min(hi, 0L))
+        def spinner = new Spinner<Long>(new LcLongValueFactory(lo, hi, initial))
         spinner.editable = true
         commitOnFocusLost(spinner, p.label as String)
         controls[p.name] = spinner
         Node node = spinner
-        if (wantsSlider(p)) node = sliderBeside(spinner, lo, hi, initial) { double b -> spinner.valueFactory.value = Math.round(b) as int }
-        return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = (it as double).intValue() }]
+        if (wantsSlider(p)) node = sliderBeside(spinner, lo, hi, initial) { double b -> spinner.valueFactory.value = Math.round(b) }
+        return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = (it as Number).longValue() }]
     }
 
     /** A spinner (optionally with a slider); with no declared limits it accepts +-LcConst.FLOAT_LIMIT. The step is 1% of a range of 100 or less, else 1. */
@@ -863,6 +1182,7 @@ class LcDialog {
         // sources first, but a tool that takes optional labels starts on "(none)"
         box.value = p.required ? (sources ? sources.keySet().first() : FILE_CHOICE) : NO_IMAGE
         imageBoxes[name] = box
+        fileFields[name] = fileField
         def sourceMap = sources
         def channelBox = p.pick_channel ? channelChooser(p, box, fileField, sourceMap) : null
         def selectionBox = p.region_of ? regionSelectionBox(name, box, fileField) : null
@@ -1000,41 +1320,95 @@ class LcDialog {
         }
     }
 
+    /** EnabledWhen: `equals` given = the controlling value is one of them (same type: 1 equals 1.0, never "1"); otherwise it is set (not unset, not false, not ""). */
+    static boolean ruleSatisfied(Map rule, Object value) {
+        if (rule.containsKey("equals")) {
+            def wanted = rule.equals instanceof List ? rule.equals : [rule.equals]
+            return wanted.any { w -> (w instanceof Number && value instanceof Number) ? (w as double) == (value as double) : (w == value && w?.class == value?.class) }
+        }
+        return value != null && !(value instanceof Boolean && !value) && value != ""
+    }
+
+    /** Calls `update` whenever the parameter `name` changes, whatever kind of control drives it: text, number, choice, yes/no, an image chooser or file field, its "set" box. */
+    void onChange(String name, Closure update) {
+        def listener = { o, a, b -> update() } as javafx.beans.value.ChangeListener
+        def control = controls[name]
+        if (control instanceof ComboBox) control.valueProperty().addListener(listener)
+        else if (control instanceof CheckBox) control.selectedProperty().addListener(listener)
+        else if (control instanceof Spinner) control.valueProperty().addListener(listener)
+        else if (control instanceof TextField) control.textProperty().addListener(listener)
+        checks[name]?.selectedProperty()?.addListener(listener)
+        fileFields[name]?.textProperty()?.addListener(listener)
+        selectionBoxes[name]?.selectedProperty()?.addListener(listener)
+    }
+
     /** EnabledWhen: the parameter's row is disabled unless the driving parameter has the required value (or is set, when no value is named). */
     void hookEnabled(Map p) {
         def cond = p.enabled_when
-        def driver = controls[cond.param]
-        def control = controls[p.name]
-        if (driver == null || control == null) return
-        def update = {
-            def v = getters[cond.param]()
-            boolean on = cond.containsKey("equals") ? (cond.equals instanceof List ? cond.equals.any { it.toString() == v?.toString() } : cond.equals.toString() == v?.toString()) : (v != null && v != false)
-            wrappers[p.name].disable = !on
-        }
-        if (driver instanceof ComboBox) driver.valueProperty().addListener({ o, a, b -> update() } as javafx.beans.value.ChangeListener)
-        else if (driver instanceof CheckBox) driver.selectedProperty().addListener({ o, a, b -> update() } as javafx.beans.value.ChangeListener)
+        if (controls[cond.param] == null || controls[p.name] == null) return
+        def update = { wrappers[p.name].disable = !ruleSatisfied(cond, getters[cond.param]()) }
+        onChange(cond.param as String, update)
         update()
     }
 
-    /** PixelSizeOf: refill the pixel size whenever another image is chosen. */
+    /** PixelSizeOf: refill the pixel size whenever another image is chosen or another file is typed, until the person edits the field (the Napari rule). */
     void hookPixelSize(Map p) {
         def box = imageBoxes[p.pixel_size_of]
-        if (box != null) box.valueProperty().addListener({ o, a, b -> fillPixelSize(p) } as javafx.beans.value.ChangeListener)
+        if (box == null) return
+        autoPixel[p.name as String] = readPixelField(p)      // what the field holds now counts as "not edited"
+        box.valueProperty().addListener({ o, a, b -> fillPixelSize(p) } as javafx.beans.value.ChangeListener)
+        fileFields[p.pixel_size_of]?.textProperty()?.addListener({ o, a, b -> fillPixelSize(p) } as javafx.beans.value.ChangeListener)
     }
 
-    /** The pixel size of a chosen QuPath image goes into its pixel-size parameter (micrometres per pixel). */
+    /** The number now in a pixel-size field, or null. */
+    Double readPixelField(Map p) {
+        def v = getters[p.name]?.call()
+        return v instanceof Number ? (v as Double) : null
+    }
+
+    /** Same number, as the box holds it (a value the host wrote and read back). */
+    static boolean sameNumber(Double a, Double b) {
+        return a == null || b == null ? a == b : Math.abs(a - b) <= 1e-9d * Math.max(Math.abs(a), Math.abs(b))
+    }
+
+    /** The calibration of the chosen image or typed file as [y, x] micrometres per pixel (null: none stored). A file that cannot be read says so and returns null. */
+    List<Double> pixelSizeOfChoice(Map p, ComboBox<String> box) {
+        try {
+            def server = null
+            if (box.value == FILE_CHOICE) {
+                def path = fileFields[p.pixel_size_of]?.text?.trim()
+                if (!path || !new File(path).isFile()) return null          // still being typed: nothing to read yet
+                server = ImageServers.buildServer(path)
+            } else {
+                server = imageSources()[box.value]?.call()
+            }
+            def cal = server?.pixelCalibration
+            return (cal != null && cal.hasPixelSizeMicrons()) ? [cal.pixelHeightMicrons, cal.pixelWidthMicrons] : null
+        } catch (Exception e) {     // broad on purpose (any reader can fail on any file): a listener on the image chooser must never break the form; the person types the value
+            LcLog.warn("pixel size of '" + box.value + "' could not be read", e)
+            status?.text = "could not read the pixel size from " + (box.value == FILE_CHOICE ? fileFields[p.pixel_size_of]?.text?.trim() : box.value) + " (" + e.message + "): type it"
+            return null
+        }
+    }
+
+    /** The pixel size of the chosen QuPath image or file goes into its pixel-size parameter (micrometres per pixel), unless the person typed another value;
+     *  pixels that are not square are said: the tool takes one value and gets X. */
     void fillPixelSize(Map p) {
         def box = imageBoxes[p.pixel_size_of]
         if (box == null) return
-        def source = imageSources()[box.value]
-        if (source == null) return
-        try {
-            def cal = source().pixelCalibration
-            if (cal.hasPixelSizeMicrons()) setters[p.name](cal.pixelWidthMicrons)
-        } catch (Exception e) {     // broad on purpose: a listener on the image dropdown must never break the form; the field keeps its value
-            LcLog.warn("pixel size of '" + box.value + "' could not be read", e)
-            status?.text = "Pixel size of '" + box.value + "' could not be read; '" + p.label + "' keeps its value: " + e.message
-        }
+        def name = p.name as String
+        if (!sameNumber(readPixelField(p), autoPixel[name])) return       // edited by the person: kept
+        def yx = pixelSizeOfChoice(p, box)
+        if (yx == null) return
+        setters[name](yx[1])
+        autoPixel[name] = readPixelField(p)
+        if (Math.abs(yx[0] - yx[1]) > LcConst.SQUARE_PIXEL_TOLERANCE * Math.max(Math.abs(yx[0]), Math.abs(yx[1])))
+            status?.text = "\u26a0 pixel size differs: Y " + significant(yx[0]) + " \u00b5m, X " + significant(yx[1]) + " \u00b5m - the tool takes one value and gets X"
+    }
+
+    /** `value` with six significant digits and no trailing zeros, like Python's "%.6g" (0.25 not 0.250000). */
+    static String significant(double value) {
+        return new BigDecimal(value).round(new java.math.MathContext(LcConst.SIGNIFICANT_DIGITS)).stripTrailingZeros().toPlainString()
     }
 
     // ---- copy as command (the text format of labconstrictor_tools.command, the reference). Quoting only through two helpers: shellQuote (terminal words)
@@ -1042,10 +1416,26 @@ class LcDialog {
     /** The placeholder path written for a required file-like parameter that has no path. */
     static final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
-    /** Quotes one word for a POSIX shell or for Windows; text made only of safe characters stays as it is. */
+    /** Quotes one word for a POSIX shell or for Windows; text made only of safe characters stays as it is. The expected results for both are the vectors of
+     *  labconstrictor-tools (tests/quote_vectors.json, copied to tests/ here): `command.quote` is the reference. */
     static String shellQuote(String text, boolean windows) {
-        if (windows) return (text && text ==~ /[A-Za-z0-9_.:\/\\=+,-]+/) ? text : '"' + text.replace('"', '\\"') + '"'
+        if (windows) return quoteWindows(text)
         return (text && text ==~ /[A-Za-z0-9_@%+=:,.\/-]+/) ? text : "'" + text.replace("'", "'\"'\"'") + "'"
+    }
+
+    /** One argument for a Windows command line, by the rules of the C runtime (CommandLineToArgvW): the text is put in double quotes unless it is made of safe characters
+     *  only; backslashes are literal, except a run of them in front of a double quote (doubled, and the quote escaped) or at the end of the text, where it sits in front
+     *  of the closing quote that is added (`"C:\My Data\"` would otherwise swallow it). */
+    static String quoteWindows(String text) {
+        if (text && text ==~ /[A-Za-z0-9_.:\/\\=+,-]+/) return text
+        def out = new StringBuilder('"')
+        int run = 0      // backslashes seen since the last other character
+        for (char c in text.toCharArray()) {
+            if (c == ('\\' as char)) { run++; continue }
+            out.append('\\' * (c == ('"' as char) ? 2 * run + 1 : run)).append(c)
+            run = 0
+        }
+        return out.append('\\' * (2 * run)).append('"').toString()
     }
 
     /** The values a command line needs, in the tool's order: the file behind each image, else a placeholder; unset parameters are left out. */
@@ -1099,11 +1489,29 @@ class LcDialog {
         return note + (kind == "python" ? pythonSnippet(given, built.values) : terminalCommand(given, built.values))
     }
 
-    /** One Python literal: True/False, a number as it is, anything else as a single-quoted string (backslash and quote escaped). */
+    /** One Python literal, written the way Python's repr writes it: True/False, a number as it is, a text in single quotes (double quotes when it holds a single
+     *  quote and no double quote); backslash, the quote, \n \r \t and every other control or non-printable character are escaped, so a pasted snippet reads back the same value. */
     static String pythonLiteral(Object v) {
         if (v instanceof Boolean) return v ? "True" : "False"
         if (v instanceof Number) return v.toString()
-        return "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'"
+        def text = v.toString()
+        String quote = (text.contains("'") && !text.contains('"')) ? '"' : "'"
+        def out = new StringBuilder(quote)
+        text.codePoints().forEach { int cp ->
+            if (cp == (int) ('\\' as char) || cp == (int) (quote as char)) out.append('\\').appendCodePoint(cp)
+            else if (cp == 10) out.append("\\n")
+            else if (cp == 13) out.append("\\r")
+            else if (cp == 9) out.append("\\t")
+            else if (cp < 32 || (cp >= 127 && cp < 160)) out.append(String.format("\\x%02x", cp))
+            else if (!isPrintable(cp)) out.append(cp > 0xFFFF ? String.format("\\U%08x", cp) : String.format("\\u%04x", cp))
+            else out.appendCodePoint(cp)
+        }
+        return out.append(quote).toString()
+    }
+
+    /** Python's str.isprintable() for one code point: not a control, format, surrogate, private-use or unassigned character, and no separator except the plain space. */
+    static boolean isPrintable(int cp) {
+        return !(Character.getType(cp) in LcConst.NON_PRINTABLE_TYPES) || cp == 32
     }
 
     /** Python that runs the tool once through the client; every name and value is written through pythonLiteral. */
@@ -1129,12 +1537,27 @@ class LcDialog {
     String copyAsCommand(String kind) {
         if (currentTool == null) return null
         def text = commandText(kind)
-        def content = new javafx.scene.input.ClipboardContent()
-        content.putString(text)
-        javafx.scene.input.Clipboard.systemClipboard.setContent(content)
         lastCopied = text
-        status.text = "copied the " + (kind == "python" ? "Python snippet" : "terminal command") + " to the clipboard"
+        def problem = putOnClipboard(text)
+        if (problem == null) {
+            status.text = "copied the " + (kind == "python" ? "Python snippet" : "terminal command") + " to the clipboard"
+        } else {      // never report a copy that did not happen (the Napari wording); the command is in the log so it is not lost
+            LcLog.warn("no clipboard to copy the " + (kind == "python" ? "Python snippet" : "terminal command") + " to (" + problem + "); the command was:\n" + text)
+            status.text = "there is no clipboard to copy to"
+        }
         return text
+    }
+
+    /** Puts `text` on the system clipboard; null, or what went wrong (headless, locked by another program, or refused). `sink` takes the content and says whether the clipboard accepted it:
+     *  the system clipboard unless a test hands in another. */
+    String putOnClipboard(String text, Closure sink = { content -> javafx.scene.input.Clipboard.systemClipboard.setContent(content) }) {
+        try {
+            def content = new javafx.scene.input.ClipboardContent()
+            content.putString(text)
+            return sink(content) ? null : "the clipboard refused the text"
+        } catch (RuntimeException e) {      // broad on purpose: the clipboard belongs to the window system and can fail in many ways (no display, locked, wrong thread)
+            return e.class.simpleName + ": " + e.message
+        }
     }
 
     // ---- the request: what the form asks for
@@ -1145,12 +1568,18 @@ class LcDialog {
             def v
             try { v = getters[p.name]() } catch (Exception e) { LcLog.warn("could not read '" + p.name + "'", e); status.text = "Check '" + p.label + "': " + e.message; return null }
             if (v == null) {
-                if (p.required && !p.nullable && p.type in ["image", "labels", "table", "file", "folder", "string"]) { status.text = "'" + p.label + "' is required."; return null }
+                if (p.required && !p.nullable && p.type in ["image", "labels", "table", "file", "folder", "string"]) { status.text = requiredSentence(p); return null }
                 continue
             }
+            if (v instanceof Double && !Double.isFinite(v)) { status.text = "'" + p.label + "' must be a finite number"; return null }      // Gson cannot write NaN or infinity: refused here, with the worker's sentence
             values[p.name] = v
         }
         return values
+    }
+
+    /** The worker's template `'L' is required` (missing_parameter); an image also gets the way out, as the Fiji dialog says it. */
+    static String requiredSentence(Map p) {
+        return "'" + p.label + "' is required" + (p.type in ["image", "labels"] ? ": choose an image, or give a file" : "")
     }
 
     // ---- running
@@ -1186,6 +1615,7 @@ class LcDialog {
 
     /** The worker is started (or replaced) when there is none for this app, or it has died. */
     void ensureWorker(Map app, String appName) {
+        idleTimer.stop()
         if (worker == null || workerApp != appName || worker.closed || !worker.proc.isAlive()) {
             stopWorker(false)
             worker = new LcWorker(app.entry)
@@ -1211,9 +1641,11 @@ class LcDialog {
     /** One run on the worker thread; every failure becomes the outcome the person reads. */
     Map runOnWorker(Map app, String appName, String toolId, List toolInputs, Map values) {
         Map outcome
+        Map inputs = null
+        def t0 = System.nanoTime()
         def tmp = Files.createTempDirectory("lcqupath_").toFile()
         try {
-            def inputs = prepareInputs(values, toolInputs, tmp, appName, toolId)
+            inputs = prepareInputs(values, toolInputs, tmp, appName, toolId)
             ensureWorker(app, appName)
             outcome = worker.run(toolId, inputs) { message, current, maximum ->
                 Platform.runLater {
@@ -1221,6 +1653,9 @@ class LcDialog {
                     progress.progress = (current != null && maximum) ? (current as double) / (maximum as double) : ProgressBar.INDETERMINATE_PROGRESS
                 }
             }
+        } catch (LcRefusal e) {
+            LcLog.warn("run of '" + toolId + "' refused: " + e.message)      // a sentence for the person, not a failure: no stack trace
+            outcome = [responseType: "FAILURE", error: e.message, code: LcConst.REFUSAL_CODE]
         } catch (Exception e) {
             // broad on purpose (isolation boundary of the run thread): any failure becomes the outcome the person reads (status line and Details, with the stack trace)
             LcLog.warn("run of '" + toolId + "' failed on the host", e)
@@ -1228,6 +1663,7 @@ class LcDialog {
         } finally {
             LcLog.deleteTemp(tmp)
         }
+        if (inputs != null && outcome.code != LcConst.REFUSAL_CODE) LcRuns.record([entry: app.entry, app: appName, tool: toolId, inputs: inputs, outcome: outcome, seconds: (System.nanoTime() - t0) / 1e9, stderr: worker?.stderrText()])      // a refusal never reached the worker: no record
         return outcome
     }
 
@@ -1239,16 +1675,16 @@ class LcDialog {
         def chosen = imageChoiceAtRun[p.region_of]
         def data = qupath?.imageData
         if (data == null || chosen == null || !chosen.startsWith("Current image"))
-            throw new IllegalStateException("'" + label + "': the selection belongs to the image open in QuPath: choose 'Current image' for the image, or untick the selection")
+            throw new LcRefusal("'" + label + "': the selection belongs to the image open in QuPath: choose 'Current image' for the image, or untick the selection")
         def selected = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }
-        if (!selected) throw new IllegalStateException("'" + label + "': no annotation is selected: select one or more annotations, or untick the selection")
-        if (selected.size() > LcConst.MAX_REGION_OBJECTS) throw new IllegalStateException("'" + label + "': " + selected.size() + " annotations are selected; at most " + LcConst.MAX_REGION_OBJECTS + " are supported")
+        if (!selected) throw new LcRefusal("'" + label + "': no annotation is selected: select one or more annotations, or untick the selection")
+        if (selected.size() > LcConst.MAX_REGION_OBJECTS) throw new LcRefusal("'" + label + "': " + selected.size() + " annotations are selected; at most " + LcConst.MAX_REGION_OBJECTS + " are supported")
         def server = data.server
         def area = areasAtRun[p.region_of] ?: LcArea.whole(server)
         if (LcArea.pixels(area) > LcConst.MAX_REGION_PIXELS)
-            throw new IllegalStateException("'" + label + "': the " + (areasAtRun[p.region_of] ? "area" : "image") + " has " + LcArea.pixels(area) + " pixels; a selection region is supported up to " + LcConst.MAX_REGION_PIXELS + " (choose 'Image area: " + LcArea.SELECTION + "' on the image, or use a smaller image or a file)")
+            throw new LcRefusal("'" + label + "': the " + (areasAtRun[p.region_of] ? "area" : "image") + " has " + LcArea.pixels(area) + " pixels; a selection region is supported up to " + LcConst.MAX_REGION_PIXELS + " (choose 'Image area: " + LcArea.SELECTION + "' on the image, or use a smaller image or a file)")
         def mask = paintLabelMask(selected, area.width as int, area.height as int, area.x0 as double, area.y0 as double)
-        if (mask == null) throw new IllegalStateException("'" + label + "': the selected annotations cover no pixel of the " + (areasAtRun[p.region_of] ? "Image area" : "image"))
+        if (mask == null) throw new LcRefusal("'" + label + "': the selected annotations cover no pixel of the " + (areasAtRun[p.region_of] ? "Image area" : "image"))
         def out = new File(tmp, p.name + ".tif")
         ImageWriterTools.writeImage(mask, out.absolutePath)
         return out
@@ -1285,11 +1721,12 @@ class LcDialog {
     /** What the tool receives for one value: images are exported (or the file's path is passed), files are checked, the rest passes unchanged. */
     Object prepareInput(Map p, String name, Object v, File tmp, String appName) {
         if (p.type in ["image", "labels"]) return prepareImageInput(p, name, v, tmp, appName)
-        if (p.type in ["file", "table", "folder"]) {
-            def f = new File(v as String)
-            if (!f.exists()) throw new FileNotFoundException("file not found: " + f)
-            return f.absolutePath
+        if (p.type == "folder") {
+            def folder = new File(v as String)
+            if (!folder.isDirectory()) throw new LcRefusal("'" + p.label + "': folder not found: " + folder)      // a regular file is not a folder; the worker's template, the sentence alone
+            return folder.absolutePath
         }
+        if (p.type in ["file", "table"]) return new File(v as String).absolutePath      // no host check: the worker answers a missing one (Tools: [file_not_found] table file not found: P), as it does for Napari and Fiji
         return v
     }
 
@@ -1307,14 +1744,14 @@ class LcDialog {
             def odd = exported.find { !areas.containsKey(it.name) || !LcArea.same(areas[it.name], areas[first]) }
             if (odd != null) {
                 def describe = { name -> areas.containsKey(name) ? LcArea.describe(areas[name]) : "the whole image (a project image, a file or Whole image)" }
-                throw new IllegalStateException("'" + odd.label + "' and '" + params.find { it.name == first }.label + "' use different areas: " + describe(odd.name) + " and " + describe(first) +
+                throw new LcRefusal("'" + odd.label + "' and '" + params.find { it.name == first }.label + "' use different areas: " + describe(odd.name) + " and " + describe(first) +
                         ". The results of a tool can have only one offset: use the same Image area for all image inputs, or Whole image")
             }
         }
         return areas
     }
 
-    /** The area of the open image that an Image area choice other than the whole image names, or an IllegalStateException that says why there is none. */
+    /** The area of the open image that an Image area choice other than the whole image names, or an LcRefusal that says why there is none. */
     Map resolveArea(Map p, String kind, def server) {
         return onFx { resolveAreaOnFx(p, kind, server) } as Map
     }
@@ -1335,26 +1772,26 @@ class LcDialog {
     Map resolveAreaOnFx(Map p, String kind, def server) {
         def label = p.label as String
         def data = qupath?.imageData
-        if (data == null) throw new IllegalStateException("'" + label + "': no image is open in QuPath for the Image area '" + kind + "': open the image, or choose '" + LcArea.WHOLE + "'")
+        if (data == null) throw new LcRefusal("'" + label + "': no image is open in QuPath for the Image area '" + kind + "': open the image, or choose '" + LcArea.WHOLE + "'")
         def viewer = qupath.viewer
         int z = viewer?.imageData != null ? viewer.getZPosition() : 0, t = viewer?.imageData != null ? viewer.getTPosition() : 0       // the plane the person is looking at
         def area = kind == LcArea.SELECTION ? selectionArea(label, data, server, z, t) : kind == LcArea.VIEWPORT ? viewportArea(label, viewer, server, z, t) : null
-        if (area == null && kind != LcArea.SELECTION && kind != LcArea.VIEWPORT) throw new IllegalStateException("'" + label + "': unknown Image area '" + kind + "'")
-        if (area == null) throw new IllegalStateException("'" + label + "': the " + kind + " lies outside the image: choose another area, or '" + LcArea.WHOLE + "'")
+        if (area == null && kind != LcArea.SELECTION && kind != LcArea.VIEWPORT) throw new LcRefusal("'" + label + "': unknown Image area '" + kind + "'")
+        if (area == null) throw new LcRefusal("'" + label + "': the " + kind + " lies outside the image: choose another area, or '" + LcArea.WHOLE + "'")
         return area
     }
 
     /** The bounding box of the selected annotations (points do not count), clamped to the image. */
     static Map selectionArea(String label, def data, def server, int z, int t) {
         def rois = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }*.ROI
-        if (!rois) throw new IllegalStateException("'" + label + "': no annotation is selected for the Image area '" + LcArea.SELECTION + "': select one or more annotations, or choose '" + LcArea.WHOLE + "'")
+        if (!rois) throw new LcRefusal("'" + label + "': no annotation is selected for the Image area '" + LcArea.SELECTION + "': select one or more annotations, or choose '" + LcArea.WHOLE + "'")
         def box = [rois*.boundsX.min(), rois*.boundsY.min(), rois.collect { it.boundsX + it.boundsWidth }.max(), rois.collect { it.boundsY + it.boundsHeight }.max()]
         return LcArea.clamped(LcArea.SELECTION, box as List<Double>, server, z, t)
     }
 
     /** The bounds of the region the viewer shows, clamped to the image. */
     static Map viewportArea(String label, def viewer, def server, int z, int t) {
-        if (viewer == null || viewer.imageData == null) throw new IllegalStateException("'" + label + "': no viewer shows the image for the Image area '" + LcArea.VIEWPORT + "': open the image in a viewer, or choose '" + LcArea.WHOLE + "'")
+        if (viewer == null || viewer.imageData == null) throw new LcRefusal("'" + label + "': no viewer shows the image for the Image area '" + LcArea.VIEWPORT + "': open the image in a viewer, or choose '" + LcArea.WHOLE + "'")
         def b = viewer.displayedRegionShape.bounds2D
         return LcArea.clamped(LcArea.VIEWPORT, [b.minX, b.minY, b.maxX, b.maxY], server, z, t)
     }
@@ -1364,10 +1801,12 @@ class LcDialog {
     String prepareImageInput(Map p, String name, Map v, File tmp, String appName) {
         if (v.selection) return selectionMask(p, tmp, appName).absolutePath          // RegionOf: the selected annotations
         boolean oneChannel = p.pick_channel && v.channel != null && v.channel >= 0
-        if (v.file && !oneChannel) return existingFile(v.file as String).absolutePath
-        def server = v.file ? ImageServers.buildServer(existingFile(v.file as String).absolutePath) : v.source.call()
+        if (v.file && !oneChannel) return existingFile(p, v.file as String).absolutePath
+        def server = v.file ? ImageServers.buildServer(existingFile(p, v.file as String).absolutePath) : v.source.call()
         def area = areasAtRun[name] ?: LcArea.whole(server)
         guardExportSize(p, server, area)
+        guardExportBytes(p, server, area, oneChannel ? 1 : server.nChannels())
+        guardPlanes(p, server, area)
         if (oneChannel && server.nChannels() > 1)       // PickChannel: only the chosen channel is exported
             server = new TransformedServerBuilder(server).extractChannels(v.channel as int).build()
         def out = new File(tmp, name + ".tif")
@@ -1380,26 +1819,62 @@ class LcDialog {
         long pixels = LcArea.pixels(area), budget = LcArea.budget()
         if (pixels <= budget) return
         def name = server.metadata?.name ?: new File(server.path.replaceFirst(/^[^:]*:\s*/, "")).name
-        throw new IllegalStateException("'" + p.label + "': the image '" + name + "' would be sent as " + area.width + " x " + area.height + " = " + pixels + " pixels (" + (area.kind == LcArea.WHOLE ? "whole image" : area.kind) +
+        throw new LcRefusal("'" + p.label + "': the image '" + name + "' would be sent as " + area.width + " x " + area.height + " = " + pixels + " pixels (" + (area.kind == LcArea.WHOLE ? "whole image" : area.kind) +
                 "), above the limit of " + budget + " pixels per plane (system property " + LcConst.MAX_EXPORT_PROPERTY + "). Choose 'Image area: " + LcArea.SELECTION + "' to send a part of it, or use a smaller image or a file")
     }
 
-    /** The file, or FileNotFoundException with its path. */
-    static File existingFile(String path) {
+    /** Refuses an export above LcArea.byteBudget() bytes (4 GiB, what Napari refuses): the pixels of the area x the channels sent x the bytes of the pixel type. */
+    static void guardExportBytes(Map p, def server, Map area, int channelsSent) {
+        long bytesPerSample = server.pixelType.bytesPerPixel as long
+        long size = LcArea.pixels(area) * channelsSent * bytesPerSample, budget = LcArea.byteBudget()
+        if (size <= budget) return
+        def name = server.metadata?.name ?: new File(server.path.replaceFirst(/^[^:]*:\s*/, "")).name
+        throw new LcRefusal("'" + p.label + "': the image '" + name + "' is " + String.format("%.1f", size / (1024d * 1024d * 1024d)) + " GB (" + area.width + " x " + area.height + " pixels x " + channelsSent +
+                " channel(s) x " + bytesPerSample + " byte(s)); exporting more than " + String.format("%.0f", budget / (1024d * 1024d * 1024d)) + " GB is not supported (system property " + LcConst.MAX_EXPORT_BYTES_PROPERTY +
+                "). Choose 'Image area: " + LcArea.SELECTION + "' to send a part of it, or use a smaller image or a file")
+    }
+
+    /** A tool that declares its axes (Axes("YX")) gets no stack by chance: a Z or T axis the tool does not declare is refused for the whole image, with the Tools
+     *  sentence (wrong_dimensions) first. The plane on screen is sent only when the person chooses an Image area (selection or viewport), which names that plane. */
+    static void guardPlanes(Map p, def server, Map area) {
+        String axes = p.axes as String
+        if (!axes || area.kind != LcArea.WHOLE) return
+        def extra = [[server.nZSlices(), "Z", "z-planes"], [server.nTimepoints(), "T", "time points"]].findAll { it[0] > 1 && !axes.contains(it[1] as String) }
+        if (!extra) return
+        def sizes = []
+        if (server.nTimepoints() > 1) sizes << server.nTimepoints()
+        if (server.nZSlices() > 1) sizes << server.nZSlices()
+        if (server.nChannels() > 1) sizes << server.nChannels()
+        sizes << server.height << server.width
+        throw new LcRefusal("'" + p.label + "' must be a " + axes.length() + "D image (" + axes + ") but got " + sizes.size() + "D with shape (" + sizes.join(", ") + ")" +
+                ": the image has " + extra.collect { it[0] + " " + it[2] }.join(" and ") + ". Choose 'Image area: " + LcArea.VIEWPORT + "' to send the plane on screen, or use a 2D image")
+    }
+
+    /** The file of image parameter `p`, or the refusal `'L': file not found: P`. */
+    static File existingFile(Map p, String path) {
         def f = new File(path)
-        if (!f.isFile()) throw new FileNotFoundException("file not found: " + f)
+        if (!f.isFile()) throw new LcRefusal("'" + p.label + "': file not found: " + f)      // the Napari and Fiji sentence, shown alone
         return f
     }
 
-    /** Results go to a new folder under <LC_HOME>/results, where the command line also puts its runs; this folder and the ones before it (by name) are kept, LcConst.RESULTS_KEPT in all. */
+    /** Results go to a new folder under <LC_HOME>/results, where the command line also puts its runs. The host never deletes a results folder: retention belongs to the Tools reference code. */
     static File newJobDir(String appName, String toolId) {
-        def root = new File(LcRegistry.searchPath().first().parentFile, "results")
+        def root = new File(LcRegistry.home(), "results")
+        root.mkdirs()
         def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss").format(new Date())
-        def job = new File(root, stamp + "_" + System.nanoTime().toString().takeRight(6) + "_" + appName + "_" + toolId)
-        job.mkdirs()
-        (root.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: []).sort { it.name }.reverse().drop(LcConst.RESULTS_KEPT).each { it.deleteDir() }
+        def job = null
+        for (int attempt = 0; job == null && attempt < LcConst.RESULTS_DIR_ATTEMPTS; attempt++) {
+            def random = new byte[LcConst.RESULTS_DIR_RANDOM_BYTES]
+            new java.security.SecureRandom().nextBytes(random)
+            def candidate = new File(root, stamp + "_" + random.collect { String.format("%02x", it & 0xff) }.join("") + "_" + slug(appName) + "_" + slug(toolId))
+            if (candidate.mkdir()) job = candidate          // a name that exists is never reused
+        }
+        if (job == null) throw new LcRefusal("could not create a results folder in " + root)
         return job
     }
+
+    /** `text` made safe for a file name: runs of other characters become "_", no leading dots, never empty (the command line's _slug). */
+    static String slug(String text) { return text.replaceAll(/[^A-Za-z0-9_.-]+/, "_").replaceFirst(/^\.+/, "") ?: "x" }
 
     /** Cancel pressed: ask the worker to stop the run. */
     void cancel() {
@@ -1416,7 +1891,7 @@ class LcDialog {
         if (type == "COMPLETION") {
             finishCompleted(appName, toolLabel, outcome, seconds)
         } else if (type == "CANCELATION") {
-            status.text = "cancelled"
+            status.text = outcome.workerStopped ? "cancelled (worker stopped)" : "cancelled"      // the Napari wording when the tool ignored Cancel and the worker was ended
         } else if (type == "CRASH") {
             status.text = "the worker stopped: " + outcome.error
             stopWorker(true)
@@ -1424,6 +1899,14 @@ class LcDialog {
             finishFailed(toolLabel, outcome)
         }
         if (!keepWorker.selected) stopWorker(false)
+        else if (worker != null) { idleTimer.duration = Duration.seconds(idleSeconds); idleTimer.playFromStart() }      // the clock of an unused worker starts when its run ends
+    }
+
+    /** The idle timer ran out: the kept worker (a torch worker holds gigabytes) is closed; the next run starts a new one. */
+    void closeIdleWorker() {
+        if (running || worker == null) return
+        LcLog.once("idle-worker:" + workerApp + ":" + idleSeconds, "the worker of '" + workerApp + "' was idle for " + idleSeconds + " s and was closed (the next run starts a new one)")
+        stopWorker(false)
     }
 
     /** A completed run: status line with the values, results window, then the post-run updates. */
@@ -1446,6 +1929,8 @@ class LcDialog {
             a.headerText = toolLabel + ": nothing found"
             a.initOwner(stage)
             a.show()
+        } else if (code == LcConst.REFUSAL_CODE) {
+            status.text = error            // a refusal of the host: the sentence alone, like Napari and Fiji
         } else {
             status.text = "failed: " + error
         }
@@ -1485,23 +1970,29 @@ class LcDialog {
         switch (r.type) {
             case "values": box.children.addAll(valuesSection(r)); break
             case "message":
-                def text = (r.text as String).replaceAll(/\*\*(.+?)\*\*/, '$1')
+                def text = (r.text as String).replaceAll(/\*\*(.+?)\*\*/, '$1').replaceAll(/(?m)^\s*[-*] /, "\u2022 ")      // bold removed, list items as bullets (the Fiji rendering)
                 messageLabel.text = (messageLabel.text && messageLabel.visible ? messageLabel.text + "\n\n" : "") + text
                 messageLabel.visible = true; messageLabel.managed = true
                 break
             case "points":
-                box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String))
+                box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String, (r.name ?: "points") as String))
                 break
             case "shapes":
                 box.children.addAll(boldLabel((r.name ?: "shapes") + " (outlines)"), wrapped(placeShapes(appName, r)))
                 break
             case ["image", "labels"]: box.children.addAll(imageSection(r)); break
             case "table":
-                box.children.addAll(boldLabel(r.name ?: "table"), tableView(r.path as String))
+                box.children.addAll(boldLabel(r.name ?: "table"), tableView(r.path as String, (r.name ?: "table") as String))
                 break
             case "affine": box.children.addAll(affineSection(r)); break
-            default:
-                box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ")"), new Label((r.path ?: r.toString()) as String))
+            case "file":
+                def named = (r.name ?: "file") as String
+                box.children.addAll(boldLabel(named + " (file)"), wrapped(new File(r.path as String).exists() ? r.path as String
+                        : "could not show the result '" + named + "': the tool reported the file " + r.path + " but it does not exist"))
+                break
+            default:      // a result type this version does not know: the file (when there is one) is listed, with one clear sentence
+                box.children.addAll(boldLabel((r.name ?: r.type) + " (" + r.type + ")"),
+                        wrapped("the tool returned a result of the type '" + r.type + "', which this version of QuPath LabConstrictor cannot show" + (r.path ? ": " + r.path : "")))
         }
     }
 
@@ -1631,7 +2122,7 @@ class LcDialog {
         }
         hierarchy.addObjects(objects)
         def text = objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>'."
-        if (total > LcConst.MAX_SHAPES) text += " Showing the first " + LcConst.MAX_SHAPES + " of " + total + "."
+        if (total > LcConst.MAX_SHAPES) text += " '" + r.name + "': showing the first " + LcConst.MAX_SHAPES + " of " + total + " outlines."
         if (holes) text += " " + holes + " outline(s) have holes (kept)."
         text += offsetNote(area)
         return text
@@ -1691,21 +2182,52 @@ class LcDialog {
     /** A bold heading label. */
     static Label boldLabel(String text) { def l = new Label(text); l.style = "-fx-font-weight: bold"; return l }
 
-    /** The first LcConst.TABLE_ROWS_SHOWN rows of a CSV file as a table, with the row count and the path. */
-    static Node tableView(String csvPath) {
-        def lines = new File(csvPath).readLines("UTF-8")
-        if (lines.isEmpty()) return new Label("(empty table)")
-        def header = splitCsv(lines[0])
+    /** The first LcConst.TABLE_ROWS_SHOWN rows of a CSV file as a table; under it "table 'name' (N rows, first M shown)" (the Napari sentence) and the path. */
+    static Node tableView(String csvPath, String name) {
+        def csv = readCsv(csvPath, LcConst.TABLE_ROWS_SHOWN + 1)      // the header and the rows that are shown
+        def rows = csv.rows
+        if (rows.isEmpty()) return new Label("(empty table)")
         def table = new TableView<List<String>>()
-        header.eachWithIndex { String h, int i ->
+        rows[0].eachWithIndex { String h, int i ->
             def col = new TableColumn<List<String>, String>(h)
             col.cellValueFactory = { cd -> new javafx.beans.property.SimpleStringProperty(i < cd.value.size() ? cd.value[i] : "") } as javafx.util.Callback
             table.columns.add(col)
         }
-        lines.drop(1).take(LcConst.TABLE_ROWS_SHOWN).each { table.items.add(splitCsv(it)) }
+        rows.drop(1).each { table.items.add(it) }
         table.prefHeight = LcConst.TABLE_HEIGHT
-        def rows = Math.max(0, lines.size() - 1)
-        return new VBox(4, table, new Label(rows + " row(s)" + (rows > LcConst.TABLE_ROWS_SHOWN ? " (first " + LcConst.TABLE_ROWS_SHOWN + " shown; the full table is in " + csvPath + ")" : "") + "  " + csvPath))
+        int shown = rows.size() - 1
+        def counted = shown + csv.hidden
+        return new VBox(4, table, new Label("table '" + name + "' (" + (csv.hidden ? counted + " rows, first " + shown + " shown; the full table is in " + csvPath : counted + " rows") + ")  " + csvPath))
+    }
+
+    /** A CSV file as records: [rows: the first `keep` records (cells as text), hidden: how many more there are]. A quoted cell may hold commas, doubled quotes and line breaks. */
+    static Map readCsv(String csvPath, int keep) {
+        def rows = [], row = [], cell = new StringBuilder()
+        int hidden = 0
+        boolean quoted = false, any = false
+        def endRecord = {
+            row << cell.toString(); cell.setLength(0)
+            if (rows.size() < keep) rows << row else hidden++
+            row = []; any = false
+        }
+        new File(csvPath).withReader("UTF-8") { reader ->
+            int previous = -1
+            int c = reader.read()
+            for (; c != -1; c = reader.read()) {
+                any = true
+                if (quoted) {
+                    if (c == 34) { quoted = false } else cell.append((char) c)
+                } else if (c == 34 && previous == 34) {         // a doubled quote inside a quoted cell: one quote
+                    cell.append('"'); quoted = true
+                } else if (c == 34) { quoted = true }
+                else if (c == 44) { row << cell.toString(); cell.setLength(0) }
+                else if (c == 10) { endRecord() }
+                else if (c != 13) cell.append((char) c)
+                previous = c
+            }
+        }
+        if (any) endRecord()
+        return [rows: rows, hidden: hidden]
     }
 
     /** One CSV line into cells: commas separate, double quotes group, a doubled quote is one quote (no multi-line cells). */

@@ -109,7 +109,7 @@ Thread.start("lc-gui-test") {
         run(dlg)
         def refused = status(dlg)
         println "STATUS_REFUSED " + refused
-        expect("guard_refuses_over_the_budget", refused.startsWith("failed:") && refused.contains("above the limit of 1000 pixels"), refused)
+        expect("guard_refuses_over_the_budget", !refused.startsWith("failed") && refused.startsWith("'Image': the image") && refused.contains("above the limit of 1000 pixels"), refused)
         expect("guard_names_image_size_and_both_ways_out", refused.contains("blobs.tif") && refused.contains("80 x 60 = 4800 pixels") && refused.contains("Image area: Selected annotation(s)") && refused.contains("smaller image or a file"), refused)
         expect("guard_ran_no_tool", fx { dlg.worker == null } && outlines().isEmpty() && (new File(LcRegistry.searchPath().first().parentFile, "results").list()?.length ?: 0) == jobsBefore, "")
         System.setProperty(PROP, "4800")      // exactly the size of the image: allowed
