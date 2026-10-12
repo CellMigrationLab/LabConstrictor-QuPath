@@ -1,0 +1,194 @@
+[
+ {
+  "label": "plain",
+  "text": "name_1.tif",
+  "posix": "name_1.tif",
+  "windows": "name_1.tif"
+ },
+ {
+  "label": "empty",
+  "text": "",
+  "posix": "''",
+  "windows": "\"\""
+ },
+ {
+  "label": "space",
+  "text": "two words",
+  "posix": "'two words'",
+  "windows": "\"two words\""
+ },
+ {
+  "label": "two-spaces",
+  "text": "a  b",
+  "posix": "'a  b'",
+  "windows": "\"a  b\""
+ },
+ {
+  "label": "single-quote",
+  "text": "it's",
+  "posix": "'it'\"'\"'s'",
+  "windows": "\"it's\""
+ },
+ {
+  "label": "double-quote",
+  "text": "say \"hi\"",
+  "posix": "'say \"hi\"'",
+  "windows": "\"say \\\"hi\\\"\""
+ },
+ {
+  "label": "lone-double-quote",
+  "text": "\"",
+  "posix": "'\"'",
+  "windows": "\"\\\"\""
+ },
+ {
+  "label": "backslash-mid",
+  "text": "a\\b",
+  "posix": "'a\\b'",
+  "windows": "a\\b"
+ },
+ {
+  "label": "backslash-only",
+  "text": "\\",
+  "posix": "'\\'",
+  "windows": "\\"
+ },
+ {
+  "label": "backslashes-mid-spaced",
+  "text": "C:\\Program Files\\x y\\z.tif",
+  "posix": "'C:\\Program Files\\x y\\z.tif'",
+  "windows": "\"C:\\Program Files\\x y\\z.tif\""
+ },
+ {
+  "label": "spaced-trailing-backslash",
+  "text": "C:\\My Data\\",
+  "posix": "'C:\\My Data\\'",
+  "windows": "\"C:\\My Data\\\\\""
+ },
+ {
+  "label": "spaced-two-trailing-backslashes",
+  "text": "C:\\My Data\\\\",
+  "posix": "'C:\\My Data\\\\'",
+  "windows": "\"C:\\My Data\\\\\\\\\""
+ },
+ {
+  "label": "trailing-backslash-unspaced",
+  "text": "C:\\dir\\",
+  "posix": "'C:\\dir\\'",
+  "windows": "C:\\dir\\"
+ },
+ {
+  "label": "quote-after-backslash",
+  "text": "x y\\\"z",
+  "posix": "'x y\\\"z'",
+  "windows": "\"x y\\\\\\\"z\""
+ },
+ {
+  "label": "quote-after-two-backslashes",
+  "text": "a\\\\\"b",
+  "posix": "'a\\\\\"b'",
+  "windows": "\"a\\\\\\\\\\\"b\""
+ },
+ {
+  "label": "quote-after-three-backslashes",
+  "text": "a\\\\\\\"b",
+  "posix": "'a\\\\\\\"b'",
+  "windows": "\"a\\\\\\\\\\\\\\\"b\""
+ },
+ {
+  "label": "unc",
+  "text": "\\\\server\\share\\my dir\\",
+  "posix": "'\\\\server\\share\\my dir\\'",
+  "windows": "\"\\\\server\\share\\my dir\\\\\""
+ },
+ {
+  "label": "equals",
+  "text": "name=two words",
+  "posix": "'name=two words'",
+  "windows": "\"name=two words\""
+ },
+ {
+  "label": "unicode-accents",
+  "text": "caf\u00e9 \u00b5m",
+  "posix": "'caf\u00e9 \u00b5m'",
+  "windows": "\"caf\u00e9 \u00b5m\""
+ },
+ {
+  "label": "unicode-cjk",
+  "text": "\u65e5\u672c\u8a9e \u4e2d\u6587",
+  "posix": "'\u65e5\u672c\u8a9e \u4e2d\u6587'",
+  "windows": "\"\u65e5\u672c\u8a9e \u4e2d\u6587\""
+ },
+ {
+  "label": "unicode-emoji",
+  "text": "emoji \ud83d\ude00",
+  "posix": "'emoji \ud83d\ude00'",
+  "windows": "\"emoji \ud83d\ude00\""
+ },
+ {
+  "label": "percent",
+  "text": "50% of %TEMP%",
+  "posix": "'50% of %TEMP%'",
+  "windows": "\"50% of %TEMP%\""
+ },
+ {
+  "label": "percent-only",
+  "text": "%",
+  "posix": "%",
+  "windows": "\"%\""
+ },
+ {
+  "label": "caret",
+  "text": "a ^ b",
+  "posix": "'a ^ b'",
+  "windows": "\"a ^ b\""
+ },
+ {
+  "label": "caret-no-space",
+  "text": "^caret",
+  "posix": "'^caret'",
+  "windows": "\"^caret\""
+ },
+ {
+  "label": "ampersand",
+  "text": "a & b",
+  "posix": "'a & b'",
+  "windows": "\"a & b\""
+ },
+ {
+  "label": "pipe-and-redirects",
+  "text": "a | b > c < d",
+  "posix": "'a | b > c < d'",
+  "windows": "\"a | b > c < d\""
+ },
+ {
+  "label": "ampersands-no-space",
+  "text": "a&&b",
+  "posix": "'a&&b'",
+  "windows": "\"a&&b\""
+ },
+ {
+  "label": "dollar-and-backtick",
+  "text": "$HOME `id` $(x)",
+  "posix": "'$HOME `id` $(x)'",
+  "windows": "\"$HOME `id` $(x)\""
+ },
+ {
+  "label": "glob",
+  "text": "* ? [a-z]",
+  "posix": "'* ? [a-z]'",
+  "windows": "\"* ? [a-z]\""
+ },
+ {
+  "label": "exclamation",
+  "text": "hello!! world",
+  "posix": "'hello!! world'",
+  "windows": "\"hello!! world\""
+ },
+ {
+  "label": "tab",
+  "text": "a\tb",
+  "posix": "'a\tb'",
+  "windows": "\"a\tb\""
+ }
+]

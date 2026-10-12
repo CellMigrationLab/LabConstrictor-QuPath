@@ -138,7 +138,7 @@ Thread.start("lc-gui-test") {
         fx { stages.each { it.close() } }
         fx { dlg.setters["tracks"]("/nonexistent/none.csv") }
         fx { dlg.run() }
-        expect("Q10_missing_table_explained", waitIdle(dlg) && status(dlg).startsWith("failed: ") && status(dlg).contains("file not found"), status(dlg))
+        expect("Q10_missing_table_explained", waitIdle(dlg) && status(dlg).startsWith("failed: ") && (status(dlg).contains("table file not found") || status(dlg).contains("No such file")) && !status(dlg).contains("IllegalState"), status(dlg))      // the worker answers a missing table (no host check)
 
         // the workers go away with the dialog
         fx { dlg.stage.close() }

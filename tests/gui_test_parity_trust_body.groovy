@@ -86,7 +86,7 @@ refused("trust_pythonpath_not_list", "field 'pythonpath' must be a list of strin
 refused("trust_param_name_path", "parameter without an identifier name")
 refused("trust_param_name_space", "parameter without an identifier name")
 refused("trust_tool_id_path", "a tool has an unexpected structure")
-refused("trust_protocol_2", "unsupported protocol 2")
+refused("trust_protocol_2", "schema protocol 2 is not supported (this host speaks [1])")
 refused("trust_tool_no_outputs", "a tool has an unexpected structure")
 if (canChown) {
     refused("trust_owner_other", "entry file is not owned by the current user")
