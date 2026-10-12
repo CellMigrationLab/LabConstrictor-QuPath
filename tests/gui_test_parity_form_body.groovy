@@ -7,9 +7,15 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def BLOBS = "/home/user/LabConstrictor-Fiji/tests/fixtures/blobs.tif"
-def THREE = "/home/user/LabConstrictor-Fiji/tests/fixtures/three_channels.tif"
-def PY = "/home/tester/v-napari/bin/python"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
+def BLOBS = FIXTURES + "/blobs.tif"
+// the registered `interactions` app gives the interpreter (python with tifffile and labconstrictor_tools) and the prefix of the synthetic apps; a body that runs in a scratch LC_HOME
+// finds the registry that holds it in LC_SHARED_HOME (tests/run_gui_ci.sh sets it; LC_HOME is the registry itself for the other bodies)
+def SHARED_HOME = new File(System.getenv("LC_SHARED_HOME") ?: System.getenv("LC_HOME"))
+def INTERACTIONS = LcJson.parse(new File(SHARED_HOME, "apps/interactions.json"))
+def PY = INTERACTIONS.python
+def WP = new File(System.getProperty("java.io.tmpdir"), "lc_parity_scratch").absolutePath      // files the bodies write (images, fake interpreters, literals)
+new File(WP).mkdirs()
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -78,7 +84,7 @@ Thread.start("lc-gui-test") {
             [id: "required", label: "Required", description: "", outputs: [], inputs: [
                 P("req_img", "image"), P("req_file", "file"), P("req_folder", "folder"), P("req_table", "table"), P("req_float", "float", [default: 1.0])]]]]
         new File(apps, "formapp.schema.json").text = LcJson.toJson(schema)
-        new File(apps, "formapp.json").text = LcJson.toJson([schema: 1, name: "formapp", display_name: "formapp", version: "", prefix: "/home/tester/v-napari", python: "/home/tester/v-napari/bin/python",
+        new File(apps, "formapp.json").text = LcJson.toJson([schema: 1, name: "formapp", display_name: "formapp", version: "", prefix: INTERACTIONS.prefix, python: PY,
                                                                 module: "labconstrictor_tools.examples.interactions", pythonpath: [], runtime_path: "", schema_path: new File(apps, "formapp.schema.json").path])
         ["chmod", "644", new File(apps, "formapp.json").path, new File(apps, "formapp.schema.json").path].execute().waitFor()
         def dlg = fx { lcShow() }
@@ -208,6 +214,6 @@ Thread.start("lc-gui-test") {
         def fine = fx { dlg.readFormValues() }
         expect("a_finite_number_goes_through", fine != null && fine.req_float == 2.5d, [fine, status(dlg)])
 
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }

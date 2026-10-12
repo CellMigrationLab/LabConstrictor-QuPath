@@ -1,5 +1,5 @@
 // ================================================================== GUI test body: result tables (QP-11) (appended to the tool script by tests/run_gui_test.sh)
-// Needs the `interactions` example app of labconstrictor-tools in LC_HOME (lchome_w3), the fixtures of LabConstrictor-Fiji and /home/tester/v-napari for tifffile.
+// Needs the `interactions` example app of labconstrictor-tools in LC_HOME (its python needs tifffile) and the sample images of tests/fixtures.
 import javafx.embed.swing.SwingFXUtils
 import javax.imageio.ImageIO
 import java.util.concurrent.CountDownLatch
@@ -7,9 +7,15 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def BLOBS = "/home/user/LabConstrictor-Fiji/tests/fixtures/blobs.tif"
-def THREE = "/home/user/LabConstrictor-Fiji/tests/fixtures/three_channels.tif"
-def PY = "/home/tester/v-napari/bin/python"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
+def BLOBS = FIXTURES + "/blobs.tif"
+// the registered `interactions` app gives the interpreter (python with tifffile and labconstrictor_tools) and the prefix of the synthetic apps; a body that runs in a scratch LC_HOME
+// finds the registry that holds it in LC_SHARED_HOME (tests/run_gui_ci.sh sets it; LC_HOME is the registry itself for the other bodies)
+def SHARED_HOME = new File(System.getenv("LC_SHARED_HOME") ?: System.getenv("LC_HOME"))
+def INTERACTIONS = LcJson.parse(new File(SHARED_HOME, "apps/interactions.json"))
+def PY = INTERACTIONS.python
+def WP = new File(System.getProperty("java.io.tmpdir"), "lc_parity_scratch").absolutePath      // files the bodies write (images, fake interpreters, literals)
+new File(WP).mkdirs()
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -97,6 +103,6 @@ Thread.start("lc-gui-test") {
         expect("empty_file_is_an_empty_table", fx { LcDialog.tableView(csv("empty.csv", ""), "e") }.with { it instanceof Label && it.text == "(empty table)" }, "")
         tmpDir.deleteDir()
 
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }

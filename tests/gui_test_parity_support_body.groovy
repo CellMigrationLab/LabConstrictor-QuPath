@@ -1,5 +1,5 @@
 // ================================================================== GUI test body: shared log and run records (QP-19, QP-20) (appended to the tool script by tests/run_gui_test.sh)
-// Needs the `interactions` example app (copied into the scratch LC_HOME, a folder named lhome_support), the blobs.tif fixture and /home/tester/v-napari (the command line labconstrictor-tools reads what is written).
+// Needs the `interactions` example app (registered in LC_SHARED_HOME; copied into the scratch LC_HOME, a folder named lhome_support) and the blobs.tif fixture; its python runs the command line labconstrictor-tools that reads what is written.
 import javafx.embed.swing.SwingFXUtils
 import javax.imageio.ImageIO
 import java.util.concurrent.CountDownLatch
@@ -7,9 +7,15 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def BLOBS = "/home/user/LabConstrictor-Fiji/tests/fixtures/blobs.tif"
-def THREE = "/home/user/LabConstrictor-Fiji/tests/fixtures/three_channels.tif"
-def PY = "/home/tester/v-napari/bin/python"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
+def BLOBS = FIXTURES + "/blobs.tif"
+// the registered `interactions` app gives the interpreter (python with tifffile and labconstrictor_tools) and the prefix of the synthetic apps; a body that runs in a scratch LC_HOME
+// finds the registry that holds it in LC_SHARED_HOME (tests/run_gui_ci.sh sets it; LC_HOME is the registry itself for the other bodies)
+def SHARED_HOME = new File(System.getenv("LC_SHARED_HOME") ?: System.getenv("LC_HOME"))
+def INTERACTIONS = LcJson.parse(new File(SHARED_HOME, "apps/interactions.json"))
+def PY = INTERACTIONS.python
+def WP = new File(System.getProperty("java.io.tmpdir"), "lc_parity_scratch").absolutePath      // files the bodies write (images, fake interpreters, literals)
+new File(WP).mkdirs()
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -55,7 +61,7 @@ Thread.start("lc-gui-test") {
         // a scratch LC_HOME with a copy of the `interactions` example app (its results, log and runs go to the scratch folder)
         def home = new File(System.getenv("LC_HOME")); assert home.path.contains("lhome_support")
         home.deleteDir(); def apps = new File(home, "apps"); apps.mkdirs()
-        def srcApps = new File("/tmp/gtc/lchome_w3/apps")
+        def srcApps = new File(SHARED_HOME, "apps")
         new File(apps, "interactions.schema.json").text = new File(srcApps, "interactions.schema.json").text
         new File(apps, "interactions.json").text = LcJson.toJson(LcJson.parse(new File(srcApps, "interactions.json")) + [schema_path: new File(apps, "interactions.schema.json").path])
         ["chmod", "644", new File(apps, "interactions.json").path, new File(apps, "interactions.schema.json").path].execute().waitFor()
@@ -74,7 +80,7 @@ Thread.start("lc-gui-test") {
 
         def logFile = new File(home, "logs/labconstrictor.log")
         def runsDir = new File(home, "runs")
-        def PYTHON = "/home/tester/v-napari/bin/python"
+        def PYTHON = PY
         def lcTools = { List args ->      // the command line of labconstrictor-tools, on the same LC_HOME
             def pb = new ProcessBuilder([PYTHON, "-m", "labconstrictor_tools"] + args); pb.environment().put("LC_HOME", home.path); pb.redirectErrorStream(true)
             def pr = pb.start(); def out = pr.inputStream.getText("UTF-8"); pr.waitFor(); out
@@ -150,6 +156,6 @@ Thread.start("lc-gui-test") {
         expect("no_run_record_is_deleted", after.containsAll(oldRecords) && written.every { it != null && new File(it, "run.json").isFile() } && after.size() >= oldRecords.size() + 60, [oldRecords.size(), after.size()])
         expect("the_oldest_records_and_a_foreign_folder_survive", new File(runsDir, "20200101T000001000000_a_b").isDirectory() && new File(runsDir, "notes").isDirectory())
 
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }

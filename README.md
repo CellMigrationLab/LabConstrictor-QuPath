@@ -77,13 +77,15 @@ Each of these is deliberate and is written once to QuPath's log (logger `labcons
 ``BODY=gui_test_fallbacks_body.groovy tests/run_gui_test.sh` checks that failures that used to be silent are reported (bad number typed into a field, unreadable value in Copy as command, host failure with stack trace in Details, unreadable channel file, intended fallbacks logged; 13 checks; needs the `interactions` example app in `LC_HOME`).
 `BODY=gui_test_area_body.groovy tests/run_gui_test.sh` checks the Image area and the size guard against the `interactions` example app and the blobs fixture (guard at and one pixel over the budget, the exported area equals the server region, outlines and points land at the blobs' full-image coordinates, the viewport area, RegionOf over an area, differing areas refused, Copy as command note; 48 checks).
 
+The `gui_test_parity_*` bodies need the registered `interactions` app (its Python also writes the test images and runs `labconstrictor-tools`; the Playground app for the cancel body). The bodies that write their own registry and results (trust, form, host, lifecycle, pixel, support) empty their `LC_HOME` first, so that one must be a scratch folder with the name given below, and `LC_SHARED_HOME` must name the registry that holds `interactions`; `tests/run_gui_ci.sh` sets both for every body.
+
 `BODY=gui_test_parity_trust_body.groovy LC_HOME=<an empty scratch folder named lhome_trust> tests/run_gui_test.sh` writes registry entries that break each trust check and checks that each one is refused with its reason and that a good entry loads (26 checks; needs root to test the owner check).
 
 `BODY=gui_test_parity_messages_body.groovy tests/run_gui_test.sh` opens a 3-plane TIFF (written with tifffile from `/home/tester/v-napari`) and checks that a refusal is the sentence alone, that a z-stack is refused for a `YX` tool with the Tools sentence and the way out, that a series, z, t and channel counts are named, and when nothing is refused (18 checks).
 
 `BODY=gui_test_parity_results_body.groovy tests/run_gui_test.sh` builds result tables of 150 000, 100 000, 2 001 and a few rows, with quoted commas, doubled quotes and multi-line cells, and checks the rows shown and the sentence (12 checks).
 
-`BODY=gui_test_parity_pixel_body.groovy LC_HOME=<registry with NucleiSky> tests/run_gui_test.sh` reads the pixel size of files (ImageJ unit, centimetre TIFF unit), keeps a typed value, says non-square pixels, reports an unreadable file (15 checks).
+`BODY=gui_test_parity_pixel_body.groovy LC_HOME=<scratch folder named lhome_pixel> tests/run_gui_test.sh` reads the pixel size of files (ImageJ unit, centimetre TIFF unit), keeps a typed value, says non-square pixels, reports an unreadable file (15 checks).
 
 `BODY=gui_test_parity_form_body.groovy LC_HOME=<scratch folder named lhome_form> tests/run_gui_test.sh` registers a synthetic app and checks the form order, ClearAfterRun for every type, EnabledWhen for every driver, number limits (whole numbers up to 2^53 - 1, held and typed), integer choices, required and non-finite inputs (55 checks).
 
@@ -95,7 +97,7 @@ Each of these is deliberate and is written once to QuPath's log (logger `labcons
 
 `BODY=gui_test_parity_support_body.groovy LC_HOME=<scratch folder named lhome_support> tests/run_gui_test.sh` checks the shared log (format, rotation, read by `labconstrictor-tools logs`) and the run records (also in `support-bundle`) (25 checks).
 
-`BODY=gui_test_parity_quote_body.groovy LC_HOME=<registry with the interactions app> tests/run_gui_test.sh` checks `shellQuote` against every case of `tests/quote_vectors.json` (the file of labconstrictor-tools, copied here), reads the quoted text back with independent readers (the C runtime rules for Windows, a POSIX word reader) and checks the terminal command of the dialog with the operating system set to Windows (13 checks).
+`BODY=gui_test_parity_quote_body.groovy LC_HOME=<registry with the interactions app> tests/run_gui_test.sh` (from the repository folder) checks `shellQuote` against every case of `tests/quote_vectors.json` (the file of labconstrictor-tools, copied here), reads the quoted text back with independent readers (the C runtime rules for Windows, a POSIX word reader) and checks the terminal command of the dialog with the operating system set to Windows (13 checks).
 
 `BODY=gui_test_buttons_body.groovy tests/run_gui_test.sh` clicks "Rescan apps" and "Restart worker" (3 checks; on the version before the split the Rescan button threw `MissingMethodException` because a local variable named `rescan` shadowed the method).
 

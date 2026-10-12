@@ -6,6 +6,7 @@ def expect = { String name, boolean ok, Object detail = "" ->
     results[name] = ok
     println((ok ? "PASS " : "FAIL ") + name + (ok ? "" : " -> " + detail))
 }
+try {
 def home = new File(System.getenv("LC_HOME")), apps = new File(home, "apps")
 assert home.path.contains("lhome_trust") : "LC_HOME must be a scratch folder named lhome_trust"
 home.deleteDir(); apps.mkdirs()
@@ -95,5 +96,6 @@ if (canChown) {
 expect("trust_no_null_pointer_text_anywhere", !problems.any { it.contains("null") && !it.contains("not a JSON") && !it.contains("must be") }, problems)
 // a hostile parameter name must never reach a file name: nothing was written outside the scratch folder
 expect("trust_nothing_escaped", !new File(home.parentFile, "escape.tif").exists() && !new File("/tmp/escape.tif").exists())
+} catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
 println "RESULTS " + results
-System.exit(0)
+System.exit(results && results.every { it.value } ? 0 : 1)

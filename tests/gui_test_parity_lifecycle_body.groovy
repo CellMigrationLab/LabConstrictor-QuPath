@@ -1,5 +1,5 @@
 // ================================================================== GUI test body: worker idle time, results folders, export bytes, shapes cap (QP-10, 12, 17, 18) (appended to the tool script by tests/run_gui_test.sh)
-// Needs the `interactions` example app (copied into the scratch LC_HOME, a folder named lhome_life) and the blobs.tif fixture.
+// Needs the `interactions` example app (registered in LC_SHARED_HOME; copied into the scratch LC_HOME, a folder named lhome_life) and the blobs.tif fixture.
 import javafx.embed.swing.SwingFXUtils
 import javax.imageio.ImageIO
 import java.util.concurrent.CountDownLatch
@@ -7,9 +7,15 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def BLOBS = "/home/user/LabConstrictor-Fiji/tests/fixtures/blobs.tif"
-def THREE = "/home/user/LabConstrictor-Fiji/tests/fixtures/three_channels.tif"
-def PY = "/home/tester/v-napari/bin/python"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
+def BLOBS = FIXTURES + "/blobs.tif"
+// the registered `interactions` app gives the interpreter (python with tifffile and labconstrictor_tools) and the prefix of the synthetic apps; a body that runs in a scratch LC_HOME
+// finds the registry that holds it in LC_SHARED_HOME (tests/run_gui_ci.sh sets it; LC_HOME is the registry itself for the other bodies)
+def SHARED_HOME = new File(System.getenv("LC_SHARED_HOME") ?: System.getenv("LC_HOME"))
+def INTERACTIONS = LcJson.parse(new File(SHARED_HOME, "apps/interactions.json"))
+def PY = INTERACTIONS.python
+def WP = new File(System.getProperty("java.io.tmpdir"), "lc_parity_scratch").absolutePath      // files the bodies write (images, fake interpreters, literals)
+new File(WP).mkdirs()
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -55,7 +61,7 @@ Thread.start("lc-gui-test") {
         // a scratch LC_HOME with a copy of the `interactions` example app (its results, log and runs go to the scratch folder)
         def home = new File(System.getenv("LC_HOME")); assert home.path.contains("lhome_life")
         home.deleteDir(); def apps = new File(home, "apps"); apps.mkdirs()
-        def srcApps = new File("/tmp/gtc/lchome_w3/apps")
+        def srcApps = new File(SHARED_HOME, "apps")
         new File(apps, "interactions.schema.json").text = new File(srcApps, "interactions.schema.json").text
         new File(apps, "interactions.json").text = LcJson.toJson(LcJson.parse(new File(srcApps, "interactions.json")) + [schema_path: new File(apps, "interactions.schema.json").path])
         ["chmod", "644", new File(apps, "interactions.json").path, new File(apps, "interactions.schema.json").path].execute().waitFor()
@@ -158,6 +164,6 @@ Thread.start("lc-gui-test") {
         run(dlg)
         expect("a_worker_that_is_not_kept_is_closed_after_the_run_as_before", Thread.sleep(1500) == null && fx { dlg.worker == null }, fx { dlg.worker })
 
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }

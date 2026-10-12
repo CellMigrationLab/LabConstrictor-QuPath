@@ -1,5 +1,5 @@
 // ================================================================== GUI test body: host texts and chooser (QP-2b, 6, 7, 13, 14, 15, 21, results) (appended to the tool script by tests/run_gui_test.sh)
-// Needs no real app: it registers two synthetic apps (only their schemas are used) in the scratch LC_HOME (a folder named lhome_host), and /home/tester/v-napari for the Python round trip.
+// Needs no real app: it registers synthetic apps (only their schemas are used) in the scratch LC_HOME (a folder named lhome_host); the registered `interactions` app (LC_SHARED_HOME) gives the Python for the round trip.
 import javafx.embed.swing.SwingFXUtils
 import javax.imageio.ImageIO
 import java.util.concurrent.CountDownLatch
@@ -7,9 +7,15 @@ import java.awt.image.BufferedImage
 import javafx.stage.Window
 
 def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdirs()
-def BLOBS = "/home/user/LabConstrictor-Fiji/tests/fixtures/blobs.tif"
-def THREE = "/home/user/LabConstrictor-Fiji/tests/fixtures/three_channels.tif"
-def PY = "/home/tester/v-napari/bin/python"
+def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)   // the sample images in this repo (the runner passes the absolute path)
+def BLOBS = FIXTURES + "/blobs.tif"
+// the registered `interactions` app gives the interpreter (python with tifffile and labconstrictor_tools) and the prefix of the synthetic apps; a body that runs in a scratch LC_HOME
+// finds the registry that holds it in LC_SHARED_HOME (tests/run_gui_ci.sh sets it; LC_HOME is the registry itself for the other bodies)
+def SHARED_HOME = new File(System.getenv("LC_SHARED_HOME") ?: System.getenv("LC_HOME"))
+def INTERACTIONS = LcJson.parse(new File(SHARED_HOME, "apps/interactions.json"))
+def PY = INTERACTIONS.python
+def WP = new File(System.getProperty("java.io.tmpdir"), "lc_parity_scratch").absolutePath      // files the bodies write (images, fake interpreters, literals)
+new File(WP).mkdirs()
 def results = [:]
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
@@ -58,7 +64,7 @@ Thread.start("lc-gui-test") {
         def P = { String name, String type, Map more = [:] -> [name: name, label: name.capitalize().replace("_", " "), type: type, required: more.required != false && !more.nullable] + more }
         def writeApp = { String app, List tools, String file = app ->      // `file`: the name of the registry file, which need not be the app's name
             new File(apps, file + ".schema.json").text = LcJson.toJson([protocol: 1, tools: tools])
-            new File(apps, file + ".json").text = LcJson.toJson([schema: 1, name: app, display_name: app, version: "", prefix: "/home/tester/v-napari", python: "/home/tester/v-napari/bin/python",
+            new File(apps, file + ".json").text = LcJson.toJson([schema: 1, name: app, display_name: app, version: "", prefix: INTERACTIONS.prefix, python: PY,
                     module: "labconstrictor_tools.examples.interactions", pythonpath: [], runtime_path: "", schema_path: new File(apps, file + ".schema.json").path])
             ["chmod", "644", new File(apps, file + ".json").path, new File(apps, file + ".schema.json").path].execute().waitFor()
         }
@@ -99,25 +105,25 @@ Thread.start("lc-gui-test") {
         fx { dlg.setters["folder"]("/etc/hostname") }
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 60)
         expect("a_file_is_not_a_folder", status(dlg) == "'Folder': folder not found: /etc/hostname", status(dlg))
-        fx { dlg.setters["folder"]("/tmp/gtc/wp/no_such_folder") }
+        fx { dlg.setters["folder"](WP + "/no_such_folder") }
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 60)
-        expect("a_missing_folder_has_the_same_sentence", status(dlg) == "'Folder': folder not found: /tmp/gtc/wp/no_such_folder", status(dlg))
+        expect("a_missing_folder_has_the_same_sentence", status(dlg) == "'Folder': folder not found: " + WP + "/no_such_folder", status(dlg))
         def tmpF = java.nio.file.Files.createTempDirectory("lcf_").toFile()
         expect("a_real_folder_passes", dlg.prepareInput([type: "folder", label: "Folder"], "folder", tmpF.path, tmpF, "alpha") == tmpF.absolutePath)
         tmpF.deleteDir()
 
         // ---- QP-2 (F01, F02, F06): a missing image file is refused with the Napari / Fiji sentence alone; a missing table or file is left to the worker, which answers it
         fx { dlg.toolBox.value = "Image file" }
-        fx { dlg.imageBoxes["pic"].value = LcDialog.FILE_CHOICE; dlg.fileFields["pic"].text = "/tmp/gtc/wp/no_such_image.tif" }
+        fx { dlg.imageBoxes["pic"].value = LcDialog.FILE_CHOICE; dlg.fileFields["pic"].text = WP + "/no_such_image.tif" }
         fx { dlg.stopWorker(true) }
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 60)
-        expect("a_missing_image_file_is_the_sentence_alone", status(dlg) == "'Pic': file not found: /tmp/gtc/wp/no_such_image.tif", status(dlg))
+        expect("a_missing_image_file_is_the_sentence_alone", status(dlg) == "'Pic': file not found: " + WP + "/no_such_image.tif", status(dlg))
         expect("a_missing_image_file_started_no_worker", fx { dlg.worker == null })
         expect("a_directory_is_not_an_image_file", { try { LcDialog.existingFile([label: "Pic"], "/tmp"); false } catch (LcRefusal e) { e.message == "'Pic': file not found: /tmp" } }())
         fx { dlg.toolBox.value = "Table and file" }
-        fx { dlg.setters["tbl"]("/tmp/gtc/wp/none.csv"); dlg.setters["doc"]("/tmp/gtc/wp/none.txt") }
+        fx { dlg.setters["tbl"](WP + "/none.csv"); dlg.setters["doc"](WP + "/none.txt") }
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 60)
-        expect("a_missing_table_reaches_the_worker", fx { dlg.worker != null } && status(dlg).startsWith("failed: ") && !status(dlg).contains("file not found: /tmp/gtc/wp/none"), status(dlg))
+        expect("a_missing_table_reaches_the_worker", fx { dlg.worker != null } && status(dlg).startsWith("failed: ") && !status(dlg).contains("file not found: " + WP + "/none"), status(dlg))
         fx { dlg.stopWorker(true) }
 
         // ---- QP-6: a text value in the Python snippet is written the way Python's repr writes it, and reads back the same
@@ -132,8 +138,8 @@ Thread.start("lc-gui-test") {
         expect("literal_invisible_formatting_is_escaped_but_letters_stay", lit("\u200bé") == "'\\u200bé'", lit("\u200bé"))
         expect("literal_numbers_and_booleans", LcDialog.pythonLiteral(2L) == "2" && LcDialog.pythonLiteral(0.5d) == "0.5" && LcDialog.pythonLiteral(true) == "True" && LcDialog.pythonLiteral(false) == "False")
         def samples = ["plain", "a\nb", "a\r\n\tb", "it's", 'say "hi"', "it's \"x\"", "C:\\new\\table", "\u0001\u007f\u0085", "\u200b\u2028é\u00e8\ud83d\ude00", "", " ", "tab\there", "'''\"\"\""]
-        def pairs = new File("/tmp/gtc/wp/literals.json"); pairs.text = LcJson.toJson(samples.collect { [lit(it), it] })
-        def pb = new ProcessBuilder(["/home/tester/v-napari/bin/python", "-c", "import json, sys\nfor lit, original in json.load(open(sys.argv[1], encoding='utf-8')):\n    assert eval(lit) == original, (lit, original)\nprint('ROUNDTRIP-OK', len(json.load(open(sys.argv[1], encoding='utf-8'))))", pairs.path])
+        def pairs = new File(WP + "/literals.json"); pairs.text = LcJson.toJson(samples.collect { [lit(it), it] })
+        def pb = new ProcessBuilder([PY, "-c", "import json, sys\nfor lit, original in json.load(open(sys.argv[1], encoding='utf-8')):\n    assert eval(lit) == original, (lit, original)\nprint('ROUNDTRIP-OK', len(json.load(open(sys.argv[1], encoding='utf-8'))))", pairs.path])
         pb.redirectErrorStream(true)
         def check = pb.start()
         def out = check.inputStream.getText("UTF-8"); check.waitFor()
@@ -149,9 +155,9 @@ Thread.start("lc-gui-test") {
 
         // ---- result types: a file the tool listed but that does not exist, and a type this version does not know
         def box = new VBox()
-        fx { dlg.addResult(box, "alpha", [type: "file", name: "report", path: "/tmp/gtc/wp/no_such_report.txt"]) }
+        fx { dlg.addResult(box, "alpha", [type: "file", name: "report", path: WP + "/no_such_report.txt"]) }
         def texts = { b -> fx { b.children.collect { it.text } } }
-        expect("missing_result_file_is_said", texts(box).contains("could not show the result 'report': the tool reported the file /tmp/gtc/wp/no_such_report.txt but it does not exist"), texts(box))
+        expect("missing_result_file_is_said", texts(box).contains("could not show the result 'report': the tool reported the file " + WP + "/no_such_report.txt but it does not exist"), texts(box))
         def box2 = new VBox()
         fx { dlg.addResult(box2, "alpha", [type: "hologram", name: "holo", path: "/tmp/x.holo"]) }
         expect("unknown_result_type_gets_one_sentence_and_the_path", texts(box2).contains("the tool returned a result of the type 'hologram', which this version of QuPath LabConstrictor cannot show: /tmp/x.holo"), texts(box2))
@@ -180,7 +186,7 @@ Thread.start("lc-gui-test") {
         expect("hint_tool_import_failed", LcWorker.hintForExit(3, "") == "the app's tool module failed to import (see the traceback above)")
         expect("hint_unknown_cause_is_a_plain_sentence", LcWorker.hintForExit(1, "boom") == "the worker process stopped unexpectedly")
         def fake = { String name, String stderr, int code ->
-            def f = new File("/tmp/gtc/wp/" + name); f.text = "#!/bin/sh\necho \"" + stderr + "\" >&2\nexit " + code + "\n"; f.setExecutable(true); f
+            def f = new File(WP + "/" + name); f.text = "#!/bin/sh\necho \"" + stderr + "\" >&2\nexit " + code + "\n"; f.setExecutable(true); f
         }
         def crashOf = { File script -> def w = new LcWorker([python: script.path, module: "m", pythonpath: [], runtime_path: ""]); try { w.crashText() } finally { w.kill() } }
         def c1 = crashOf(fake("fake_missing.sh", "ModuleNotFoundError: No module named 'foo'", 1))
@@ -190,6 +196,6 @@ Thread.start("lc-gui-test") {
         def c3 = crashOf(fake("fake_import.sh", "tool module broke", 3))
         expect("live_crash_import_failed_with_the_last_words", c3.startsWith("the app's tool module failed to import (see the traceback above) (exit code 3). tool module broke"), c3)
 
-    } catch (Throwable t) { t.printStackTrace() }
-    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(0) }
+    } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
+    finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }
