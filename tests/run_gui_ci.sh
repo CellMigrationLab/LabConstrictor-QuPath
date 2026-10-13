@@ -17,7 +17,9 @@ declare -A needs=(
   [gui_test_adversarial_body.groovy]="adv"
   [gui_test_playground_body.groovy]="LabConstrictorPlayground"
   [gui_test_frame_body.groovy]="frame"
+  [gui_test_calibration_body.groovy]="frame"
   [gui_test_frame_body.groovy]="frame"
+  [gui_test_calibration_body.groovy]="frame"
 )
 for b in area buttons channel copy fallbacks interactions region shapes widgets; do needs[gui_test_${b}_body.groovy]="interactions"; done
 for b in parity_form parity_host parity_lifecycle parity_messages parity_pixel parity_results parity_support parity_quote; do needs[gui_test_${b}_body.groovy]="interactions"; done
