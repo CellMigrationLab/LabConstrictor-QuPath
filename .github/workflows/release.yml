@@ -109,13 +109,74 @@ jobs:
             { cat body.md; echo; echo; cat release-notes-addition.md; } > notes.md
             gh release edit "$TAG" --notes-file notes.md
           fi
-  discover:
-    runs-on: ubuntu-latest
+  os-smoke:
+    # Windows and macOS (arm64): the same jar in the pinned QuPath build of that platform, on the runner's desktop. Best effort: these jobs inform
+    # (the table in the job summary says pass, fail with the reason, or "no gui"), they never block a release; publish waits for the Linux smoke only.
+    needs: build
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: QuPath-v0.7.0-Windows.zip
+            sha256: 5839743281d11eca1ac55c87ddcf92c89a30cba7ba2060f162036b0514b1e30c
+          - os: macos-latest   # Apple silicon (arm64)
+            asset: QuPath-v0.7.0-Mac-arm64.pkg
+            sha256: 955c4cdaa239610feccd4d315a09df5bb13835407766009a56585f9504b9b2e1
     steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with: { python-version: "3.12" }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-files
+          path: release-files
+      - name: Cache the QuPath download
+        id: dl-cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: qupath-download
+          key: qupath-dl-${{ matrix.asset }}-${{ matrix.sha256 }}
+      - name: Download and check QuPath
+        if: steps.dl-cache.outputs.cache-hit != 'true'
+        shell: bash
         run: |
-          gh api repos/qupath/qupath/releases/tags/v0.7.0 --jq '.assets[] | [.name, .size, .digest] | @tsv'
-          for n in $(gh api repos/qupath/qupath/releases/tags/v0.7.0 --jq '.assets[].name' | grep -iE 'windows|mac'); do
-            curl -fsSL --retry 5 -o "$n" "https://github.com/qupath/qupath/releases/download/v0.7.0/$n" && sha256sum "$n" && case "$n" in *.zip) unzip -l "$n" | head -15;; esac; rm -f "$n"
-          done
+          mkdir -p qupath-download
+          curl -fsSL --retry 5 --retry-delay 10 -o "qupath-download/${{ matrix.asset }}" "https://github.com/qupath/qupath/releases/download/v${QUPATH_VERSION}/${{ matrix.asset }}"
+          echo "${{ matrix.sha256 }}  qupath-download/${{ matrix.asset }}" > sha.txt
+          if command -v sha256sum >/dev/null; then sha256sum -c sha.txt; else shasum -a 256 -c sha.txt; fi
+      - name: Unpack QuPath (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Expand-Archive -Path "qupath-download/${{ matrix.asset }}" -DestinationPath qupath-dist
+      - name: Install QuPath (macOS)
+        if: runner.os == 'macOS'
+        run: sudo installer -pkg "qupath-download/${{ matrix.asset }}" -target /
+      - name: Register the small apps (scratch LC_HOME, this OS's Python)
+        shell: bash
+        run: PYTHON=python tests/ci_setup_os.sh "$RUNNER_TEMP/lc" main
+      - name: Smoke test the jar and the OS-specific code paths
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            APPDIR="$PWD/qupath-dist/app"
+            LAUNCHER="$(find qupath-dist -maxdepth 1 -name '*console*.exe' | head -1)"
+            [ -n "$LAUNCHER" ] || LAUNCHER="$(find qupath-dist -maxdepth 1 -name '*.exe' | head -1)"
+          else
+            APP="$(ls -d /Applications/QuPath*.app | head -1)"
+            APPDIR="$APP/Contents/app"
+            LAUNCHER="$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -name 'QuPath*' | head -1)"
+          fi
+          case "$LAUNCHER" in /*) ;; *) LAUNCHER="$PWD/$LAUNCHER";; esac
+          echo "QuPath app folder: $APPDIR"; echo "launcher: $LAUNCHER"; ls "$APPDIR" | head -5
+          LOGS="$PWD/os-logs" tests/smoke_os.sh "$APPDIR" "$LAUNCHER" "$(ls "$PWD"/release-files/labconstrictor-qupath-*.jar)" "$RUNNER_TEMP/lc/home"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: os-smoke-logs-${{ matrix.os }}
+          path: os-logs
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,6 +1,6 @@
 // Smoke test of a built extension jar (tests/smoke_jar.sh). QuPath runs this file once started, with the jar on its class path:
 // the menu entry Extensions > "LabConstrictor tools..." must exist and pressing it must open the "LabConstrictor tools" window
-// (the joined script is read from the jar). Exit code 0 only when both hold.
+// (the joined script is read from the jar). With the environment variable LC_SMOKE_APP the dialog must also list that app. Exit code 0 only when all hold.
 import javafx.application.Platform
 import javafx.scene.control.Menu
 import javafx.stage.Stage
@@ -30,6 +30,13 @@ Thread.start("lc-smoke") {
             }
             println((dialog != null ? "PASS " : "FAIL ") + "dialog 'LabConstrictor tools' opens")
             ok = dialog != null
+            // optional (the OS smokes register one app): the app chooser of the dialog must list it
+            def app = System.getenv("LC_SMOKE_APP")
+            if (ok && app) {
+                def listed = fx { dialog.scene.root.lookupAll(".combo-box").any { it.items.any { i -> i.toString() == app } } }
+                println((listed ? "PASS " : "FAIL ") + "the dialog lists the registered app " + app)
+                ok = listed
+            }
         }
     } catch (Throwable t) { t.printStackTrace() }
     println "SMOKE " + (ok ? "OK" : "FAILED")
