@@ -106,6 +106,10 @@ Thread.start("lc-gui-test") {
         // ---- the five parts of a lookup's identity, one at a time (SPEC 5.2): a reply that differs from the current question in only ONE of them is dropped whole, the same reply with all five is applied
         pick(dlg, "runs", "Tool B")
         waitFor({ shown("mode") }, 30)
+        // a dropdown that was filled goes back to the text field at once when a value it depends on changes (the choices belong to the old value), and is filled again by the new answer
+        setText("key", "k2")
+        expect("ASY-02_a_filled_dropdown_is_pending_and_empty_at_once_when_its_dependency_changes", fx { dlg.lookups.isPending("mode") && !dlg.choiceBoxes["mode"].visible && dlg.choiceBoxes["mode"].items.isEmpty() && dlg.controls["mode"].visible && dlg.controls["mode"].tooltip?.text == "waiting for the choices..." }, [fx { dlg.lookups.isPending("mode") }, shown("mode"), itemsOf("mode")])
+        expect("ASY-02_and_it_is_filled_again_by_the_answer_for_the_new_value", waitFor({ shown("mode") && itemsOf("mode") == ["", "b1", "b2", "b3"] && !fx { dlg.lookups.isPending("mode") } }, 30) && fx { dlg.controls["mode"].tooltip == null }, [shown("mode"), itemsOf("mode")])
         def modeParam = fx { dlg.currentTool.inputs.find { it.name == "mode" } }
         def depsNow = fx { LcJson.toJson(dlg.choiceRequest(modeParam)) }
         def reqOf = { Map over -> [gen: LcLookups.FORM_GENERATION.get(), app: "runs", tool: "tool_b", param: "mode", id: fx { dlg.lookups.latestId("mode") }, deps: depsNow] + over }
