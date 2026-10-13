@@ -70,6 +70,10 @@ class LcConst {
     static final List<Double> SUPPORTED_PROTOCOLS = [1d] // schema protocol versions this script understands
     static final List<String> PARAMETER_TYPES = ["string", "integer", "float", "boolean", "choice", "image", "labels", "table", "file", "folder"]   // the parameter types of docs/PROTOCOL.md
     static final String REFUSAL_CODE = "host_refusal"    // internal code of an LcRefusal outcome (never shown: the status line shows the sentence alone)
+    static final String CODE_SELECTION_MIXED_PLANES = "selection_mixed_planes"      // host-side refusal codes of SPEC_WRONG_SCIENCE 1.4 (conformance.json: host_internal_codes); they go to the log and the outcome's `reason`, the person reads the sentence
+    static final String CODE_SELECTION_PLANE_MISMATCH = "selection_plane_mismatch"
+    static final String FILE_INPUT_NOTE = "file input: results are in the file's pixel frame"      // conformance.json messages.file_input_note (SPEC 1.3)
+    static final String SIZE_MISMATCH_TEMPLATE = "'{name}' is {w} x {h} but '{source}' was exported as {w2} x {h2}; shown at the pixel origin, not aligned"      // messages.size_mismatch (SPEC 1.1.7)
     static final List<Long> NATIVE_CRASH_CODES = [-11L, 139L, 3221225477L, -1073741819L]   // segmentation fault (Linux, macOS) and the Windows access violation, unsigned (Python) and signed (Java)
     static final int EXIT_TOOL_IMPORT_FAILED = 3         // the worker's exit code when the app's tool module cannot be imported
     static final List<Integer> NON_PRINTABLE_TYPES = [Character.CONTROL, Character.FORMAT, Character.SURROGATE, Character.PRIVATE_USE, Character.UNASSIGNED,
@@ -113,7 +117,8 @@ class LcConst {
 /** A run the host refuses before starting any tool (no selection, no image, an area outside the image, ...). The message is the whole sentence the person
  *  reads, the way the Napari and Fiji hosts show it: the status line shows it alone, with no class name and no "failed:". */
 class LcRefusal extends IllegalStateException {
-    LcRefusal(String sentence) { super(sentence) }
+    final String code           // a host-side code of conformance.json (host_internal_codes) when the refusal has one, else null
+    LcRefusal(String sentence, String code = null) { super(sentence); this.code = code }
 }
 
 // ---------------------------------------------------------------------------------------------------- logging
@@ -195,7 +200,9 @@ class LcJson {
 // ---------------------------------------------------------------------------------------------------- image area
 /** The part of an image a tool receives ("Image area") and what maps its results back: an area is a Map
  *  [kind, x0, y0, width, height, downsample, z, t] in full-resolution slide pixels; `downsample` is always 1.0 for now and is the one field the
- *  later resolution step changes. A result at (x, y) of the exported image lies at (x0 + x * downsample, y0 + y * downsample) of the slide. */
+ *  later resolution step changes. This Map is the QuPath form of the frame of SPEC_WRONG_SCIENCE 1.1.2 (`axes_offset` = x0, y0 and the plane, `plane` = z, t,
+ *  `downsample`, `shape` = width x height; the transform is the identity: a QuPath image has none). A result at (x, y) of the exported image (pixel centres at
+ *  integers) lies at the continuous full-resolution coordinate c = x0 + (x + 0.5) * downsample (1.1.3), on the plane (z, t) that was exported (1.1.9). */
 class LcArea {
     static final String WHOLE = "Whole image"
     static final String SELECTION = "Selected annotation(s)"
@@ -216,9 +223,23 @@ class LcArea {
         return LcConst.MAX_EXPORT_PIXELS
     }
 
-    /** The whole image of `server` (plane z 0, t 0, as the export always was). */
-    static Map whole(def server) {
-        return [kind: WHOLE, x0: 0, y0: 0, width: server.width, height: server.height, downsample: LcConst.FULL_RESOLUTION, z: 0, t: 0]
+    /** The whole image of `server` on plane (z, t): the plane the viewer shows at run start for the image open in QuPath (SPEC 1.2.7: whole-image export uses the
+     *  same plane as the viewport and the selection), plane 0 / 0 for a project image or a file (nothing shows it). */
+    static Map whole(def server, int z = 0, int t = 0) {
+        return [kind: WHOLE, x0: 0, y0: 0, width: server.width, height: server.height, downsample: LcConst.FULL_RESOLUTION, z: z, t: t]
+    }
+
+    /** SPEC 1.2.7: every selected annotation must lie on one ImagePlane, and that plane must be the one exported (the viewer's, `z` and `t`). Mixed planes
+     *  are refused with selection_mixed_planes, one other plane with selection_plane_mismatch; the host never switches the plane behind the person's back.
+     *  `rois` are the ROIs of the annotations that define the crop or the mask. */
+    static void checkSelectionPlane(String label, Collection rois, int z, int t) {
+        def planes = rois.collect { [it.z as int, it.t as int] }.unique()
+        def name = { List zt -> "z=" + zt[0] + " t=" + zt[1] }
+        if (planes.size() > 1)
+            throw new LcRefusal("'" + label + "': the selected annotations lie on different image planes (" + planes.collect(name).join(", ") + "); select annotations of one plane only", LcConst.CODE_SELECTION_MIXED_PLANES)
+        if (planes && planes[0] != [z, t])
+            throw new LcRefusal("'" + label + "': the selected annotation(s) lie on the plane " + name(planes[0]) + " but the plane that is exported is " + name([z, t]) +
+                    ", the one shown in the viewer; show that plane in the viewer, or select annotations on the plane shown", LcConst.CODE_SELECTION_PLANE_MISMATCH)
     }
 
     /** The box [minX, minY, maxX, maxY] widened to whole pixels and clamped to the image of `server` (anything with width and height); null when nothing of it is inside. */
@@ -680,6 +701,9 @@ class LcDialog {
     Map<String, ComboBox<String>> imageBoxes = [:]
     Map<String, ComboBox<String>> areaBoxes = [:]     // Image area: the area chooser of each image / labels parameter
     volatile Map<String, Map> areasAtRun = [:]        // image parameter -> its area in the run in progress (only parameters with an area other than the whole image)
+    volatile Map<String, Integer> planeAtRun = [z: 0, t: 0]    // the plane the viewer showed when the run started: what the image open in QuPath is exported on and its results are placed on (SPEC 1.1.9, 1.2.7)
+    volatile Map<String, Map> framesAtRun = [:]        // image parameter -> [width, height] of what the tool received (SPEC 1.1.7: a result that says ApplyTo and has another size is said)
+    List<String> resultNotes = []                      // sentences about the results of the last run that go to the status line (e.g. size_mismatch), said once
     Map<String, String> imageOf = [:]            // pixel-size parameter -> image parameter
     Map<String, Double> autoPixel = [:]          // pixel-size parameter -> the value the host last wrote (a different value in the box was typed by the person)
     Map<String, TextField> fileFields = [:]      // image parameter -> the field for a file path
@@ -1654,8 +1678,8 @@ class LcDialog {
                 }
             }
         } catch (LcRefusal e) {
-            LcLog.warn("run of '" + toolId + "' refused: " + e.message)      // a sentence for the person, not a failure: no stack trace
-            outcome = [responseType: "FAILURE", error: e.message, code: LcConst.REFUSAL_CODE]
+            LcLog.warn("run of '" + toolId + "' refused" + (e.code ? " [" + e.code + "]" : "") + ": " + e.message)      // a sentence for the person, not a failure: no stack trace
+            outcome = [responseType: "FAILURE", error: e.message, code: LcConst.REFUSAL_CODE, reason: e.code]       // reason: the host-side code (conformance host_internal_codes) when there is one
         } catch (Exception e) {
             // broad on purpose (isolation boundary of the run thread): any failure becomes the outcome the person reads (status line and Details, with the stack trace)
             LcLog.warn("run of '" + toolId + "' failed on the host", e)
@@ -1678,9 +1702,10 @@ class LcDialog {
             throw new LcRefusal("'" + label + "': the selection belongs to the image open in QuPath: choose 'Current image' for the image, or untick the selection")
         def selected = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }
         if (!selected) throw new LcRefusal("'" + label + "': no annotation is selected: select one or more annotations, or untick the selection")
+        LcArea.checkSelectionPlane(label, selected*.ROI, planeAtRun.z, planeAtRun.t)       // the mask is for the plane that is exported (QuPath #21)
         if (selected.size() > LcConst.MAX_REGION_OBJECTS) throw new LcRefusal("'" + label + "': " + selected.size() + " annotations are selected; at most " + LcConst.MAX_REGION_OBJECTS + " are supported")
         def server = data.server
-        def area = areasAtRun[p.region_of] ?: LcArea.whole(server)
+        def area = areasAtRun[p.region_of] ?: LcArea.whole(server, planeAtRun.z, planeAtRun.t)
         if (LcArea.pixels(area) > LcConst.MAX_REGION_PIXELS)
             throw new LcRefusal("'" + label + "': the " + (areasAtRun[p.region_of] ? "area" : "image") + " has " + LcArea.pixels(area) + " pixels; a selection region is supported up to " + LcConst.MAX_REGION_PIXELS + " (choose 'Image area: " + LcArea.SELECTION + "' on the image, or use a smaller image or a file)")
         def mask = paintLabelMask(selected, area.width as int, area.height as int, area.x0 as double, area.y0 as double)
@@ -1712,6 +1737,8 @@ class LcDialog {
     /** The request inputs: every form value prepared, plus the host-owned results folder as `_job_dir`. */
     Map prepareInputs(Map values, List params, File tmp, String appName, String toolId) {
         def inputs = new LinkedHashMap()
+        planeAtRun = viewerPlane()                      // one plane for the whole run, read once (what is exported, masked and drawn on is the same plane)
+        framesAtRun = [:]
         areasAtRun = resolveAreas(values, params)       // before anything is exported: a refused area costs nothing
         values.each { name, v -> inputs[name] = prepareInput(params.find { it.name == name }, name as String, v, tmp, appName) }
         inputs["_job_dir"] = newJobDir(appName, toolId).absolutePath
@@ -1751,6 +1778,14 @@ class LcDialog {
         return areas
     }
 
+    /** The plane the viewer shows now ([z, t]; 0 / 0 when no viewer shows an image): read on the FX thread. */
+    Map<String, Integer> viewerPlane() {
+        return onFx {
+            def viewer = qupath?.viewer
+            viewer?.imageData != null ? [z: viewer.getZPosition() as int, t: viewer.getTPosition() as int] : [z: 0, t: 0]
+        } as Map
+    }
+
     /** The area of the open image that an Image area choice other than the whole image names, or an LcRefusal that says why there is none. */
     Map resolveArea(Map p, String kind, def server) {
         return onFx { resolveAreaOnFx(p, kind, server) } as Map
@@ -1774,7 +1809,7 @@ class LcDialog {
         def data = qupath?.imageData
         if (data == null) throw new LcRefusal("'" + label + "': no image is open in QuPath for the Image area '" + kind + "': open the image, or choose '" + LcArea.WHOLE + "'")
         def viewer = qupath.viewer
-        int z = viewer?.imageData != null ? viewer.getZPosition() : 0, t = viewer?.imageData != null ? viewer.getTPosition() : 0       // the plane the person is looking at
+        int z = planeAtRun.z, t = planeAtRun.t       // the plane the person was looking at when the run started
         def area = kind == LcArea.SELECTION ? selectionArea(label, data, server, z, t) : kind == LcArea.VIEWPORT ? viewportArea(label, viewer, server, z, t) : null
         if (area == null && kind != LcArea.SELECTION && kind != LcArea.VIEWPORT) throw new LcRefusal("'" + label + "': unknown Image area '" + kind + "'")
         if (area == null) throw new LcRefusal("'" + label + "': the " + kind + " lies outside the image: choose another area, or '" + LcArea.WHOLE + "'")
@@ -1785,6 +1820,7 @@ class LcDialog {
     static Map selectionArea(String label, def data, def server, int z, int t) {
         def rois = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }*.ROI
         if (!rois) throw new LcRefusal("'" + label + "': no annotation is selected for the Image area '" + LcArea.SELECTION + "': select one or more annotations, or choose '" + LcArea.WHOLE + "'")
+        LcArea.checkSelectionPlane(label, rois, z, t)       // one plane, the exported one (QuPath #21)
         def box = [rois*.boundsX.min(), rois*.boundsY.min(), rois.collect { it.boundsX + it.boundsWidth }.max(), rois.collect { it.boundsY + it.boundsHeight }.max()]
         return LcArea.clamped(LcArea.SELECTION, box as List<Double>, server, z, t)
     }
@@ -1801,9 +1837,10 @@ class LcDialog {
     String prepareImageInput(Map p, String name, Map v, File tmp, String appName) {
         if (v.selection) return selectionMask(p, tmp, appName).absolutePath          // RegionOf: the selected annotations
         boolean oneChannel = p.pick_channel && v.channel != null && v.channel >= 0
-        if (v.file && !oneChannel) return existingFile(p, v.file as String).absolutePath
+        if (v.file && !oneChannel) return passFile(p, name, existingFile(p, v.file as String))
         def server = v.file ? ImageServers.buildServer(existingFile(p, v.file as String).absolutePath) : v.source.call()
-        def area = areasAtRun[name] ?: LcArea.whole(server)
+        def area = areasAtRun[name] ?: LcArea.whole(server, *exportedPlane(name, v))
+        framesAtRun[name] = [width: area.width, height: area.height]
         guardExportSize(p, server, area)
         guardExportBytes(p, server, area, oneChannel ? 1 : server.nChannels())
         guardPlanes(p, server, area)
@@ -1812,6 +1849,24 @@ class LcDialog {
         def out = new File(tmp, name + ".tif")
         ImageWriterTools.writeImageRegion(server, LcArea.request(server, area), out.absolutePath)
         return out.absolutePath
+    }
+
+    /** The plane an image input is exported on when no area names one: the viewer's plane at run start for the image open in QuPath ("Current image"),
+     *  plane 0 / 0 for a project image or a file (nothing shows them, and a file is its own pixel frame, SPEC 1.3). */
+    List<Integer> exportedPlane(String name, Map v) {
+        return (!v.file && isCurrentImage(imageChoiceAtRun[name])) ? [planeAtRun.z, planeAtRun.t] : [0, 0]
+    }
+
+    /** A file the tool reads as it is (no export): its path; its size is kept as the frame, for the size sentence of SPEC 1.1.7 (unreadable: no size known). */
+    String passFile(Map p, String name, File file) {
+        try {
+            def server = ImageServers.buildServer(file.absolutePath)
+            framesAtRun[name] = [width: server.width, height: server.height]
+            server.close()
+        } catch (Exception e) {      // broad on purpose (any reader can fail on any file): the tool reports an unreadable file; here only the size of the frame is missing
+            LcLog.warn("size of '" + file + "' could not be read (no frame size for the size check)", e)
+        }
+        return file.absolutePath
     }
 
     /** Refuses an export above the budget (LcArea.budget): never a silent downsample or crop. */
@@ -1914,7 +1969,9 @@ class LcDialog {
         def results = outcome.outputs?.results ?: []
         def summary = results.findAll { it.type == "values" }.collect { r -> r.values.collect { k, v -> k + "=" + show(v) }.join(", ") }.join("; ")
         status.text = "done in " + String.format("%.1f", seconds) + "s  " + summary
+        resultNotes = []
         showResults(appName, toolLabel, results)
+        if (resultNotes) status.text = status.text + "  " + resultNotes.unique().join(" ")      // what the person must know about where the results are (size mismatch, SPEC 1.1.7)
         clearAfterRun()
         scheduleChoices(LcConst.CHOICES_AFTER_RUN_MS)          // a run may change what a source tool answers (e.g. a game was prepared)
     }
@@ -2015,7 +2072,27 @@ class LcDialog {
         }
         def l = new Label(path); l.wrapText = true
         nodes.addAll([boldLabel((r.name ?: r.type) + " (" + r.type + ", axes " + (r.axes ?: "?") + ")"), l, open])
+        def mismatch = sizeMismatch(r)
+        if (mismatch) { nodes << wrapped(mismatch); resultNotes << mismatch }
         return nodes
+    }
+
+    /** SPEC 1.1.7: an image or labels result that says ApplyTo and has another Y/X size than the part of its source the tool received is never aligned (QuPath opens a
+     *  result as an image of its own at the pixel origin); the sentence is conformance `size_mismatch`. Empty when the sizes agree or one of them is unknown. */
+    String sizeMismatch(Map r) {
+        def declared = r.apply_to ?: currentTool?.outputs?.find { it.name == r.name }?.display?.apply_to      // only a result that says ApplyTo (the first image input is not assumed)
+        def frame = declared ? framesAtRun[declared as String] : null
+        if (frame == null) return ""
+        try {
+            def server = ImageServers.buildServer(r.path as String)
+            if (server.width == frame.width && server.height == frame.height) return ""
+            def source = currentTool?.inputs?.find { it.name == declared }?.label ?: declared
+            return LcConst.SIZE_MISMATCH_TEMPLATE.replace("{name}", (r.name ?: r.type) as String).replace("{w}", server.width as String).replace("{h}", server.height as String)
+                    .replace("{source}", source as String).replace("{w2}", frame.width as String).replace("{h2}", frame.height as String)
+        } catch (Exception e) {      // broad on purpose (any reader can fail on any file): the preview reports an unreadable result; here the size check is just skipped
+            LcLog.warn("size of the result '" + r.name + "' could not be read (no size check)", e)
+            return ""
+        }
     }
 
     /** An alignment matrix (matrix_yx) printed with 5 decimals. */
@@ -2043,10 +2120,15 @@ class LcDialog {
     Stage lastResultStage       // the window of the last results
 
     // ---- placing results on the image (points, outlines)
+    /** The input an output's results belong to: the one its ApplyTo names (the result's own `apply_to`, else the declaration in the schema), else the first image or labels input. */
+    String applyToOf(Map r) {
+        return r.apply_to ?: currentTool?.outputs?.find { it.name == r.name }?.display?.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
+    }
+
     /** The image open in QuPath when an output's results were found in it (the image parameter was "Current image" for this run); otherwise null. */
     def openImageFor(Map r) {
         def data = qupath?.imageData
-        def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
+        def target = applyToOf(r)
         def chosen = target ? imageChoiceAtRun[target] : null
         return (data == null || chosen == null || !chosen.startsWith("Current image")) ? null : data
     }
@@ -2054,9 +2136,25 @@ class LcDialog {
     /** The area the results of output `r` were found in: that of its apply_to image (a region parameter counts as the image it belongs to), else of the
      *  first image input; null when that input was sent whole (no offset). */
     Map areaFor(Map r) {
-        def target = r.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
+        def target = applyToOf(r)
         def param = currentTool?.inputs?.find { it.name == target }
         return areasAtRun[(param?.region_of ?: target) as String]
+    }
+
+    /** The plane the results of a run are drawn on (SPEC 1.1.9): the plane of the area that was exported, else the plane the viewer showed at run start
+     *  (the whole image of the open image is exported on that plane), never plane 0 by default. */
+    ImagePlane placementPlane(Map area) {
+        return area != null ? LcArea.plane(area) : ImagePlane.getPlane(planeAtRun.z as int, planeAtRun.t as int)
+    }
+
+    /** Why the results of output `r` are not drawn on an image (SPEC 1.1.5, 1.3): a file input is its own pixel frame and says so (conformance `file_input_note`);
+     *  any other source that is not the image open in QuPath is named; the files stay where they are. */
+    String notPlacedSentence(Map r, String what) {
+        def target = applyToOf(r)
+        def chosen = target ? imageChoiceAtRun[target] : null
+        def where = r.path ? " The " + what + " are in " + r.path : ""
+        if (chosen == LcDialog.FILE_CHOICE) { resultNotes << LcConst.FILE_INPUT_NOTE; return "Not placed on an image: " + LcConst.FILE_INPUT_NOTE + "." + where }      // also in the status line
+        return "Not placed on an image (the " + what + " were not found in the image open in QuPath)." + where
     }
 
     /** The sentence that tells the person the results were moved by the area's offset (empty for the whole image). */
@@ -2070,7 +2168,7 @@ class LcDialog {
         if (data == null)
         {
             LcLog.once("points-not-placed:" + appName + ":" + r.name, "points '" + r.name + "' not placed: they were not found in the image open in QuPath (table only)")
-            return "Not placed on an image (the points were not found in the image open in QuPath)."
+            return notPlacedSentence(r, "points")
         }
         def lines = new File(r.path as String).readLines("UTF-8")
         def header = splitCsv(lines[0])
@@ -2086,7 +2184,7 @@ class LcDialog {
         def hierarchy = data.hierarchy
         def previous = hierarchy.annotationObjects.findAll { it.name == name }
         if (previous && currentTool.outputs.any { it.name == r.name && it.replace }) hierarchy.removeObjects(previous, true)   // Replace()
-        def obj = PathObjects.createAnnotationObject(ROIs.createPointsROI(xs as double[], ys as double[], LcArea.plane(area)))
+        def obj = PathObjects.createAnnotationObject(ROIs.createPointsROI(xs as double[], ys as double[], placementPlane(area)))
         obj.name = name
         hierarchy.addObject(obj)
         return xs.size() + " point(s) added to the open image as the annotation '" + name + "'." + offsetNote(area)
@@ -2107,12 +2205,12 @@ class LcDialog {
         if (data == null)
         {
             LcLog.once("shapes-not-placed:" + appName + ":" + r.name, "outlines '" + r.name + "' not placed: they were not found in the image open in QuPath")
-            return "Not placed on an image (the outlines were not found in the image open in QuPath)."
+            return notPlacedSentence(r, "outlines")
         }
         def collection = new Gson().fromJson(new File(r.path as String).getText("UTF-8"), Map)
         def prefix = appName + ":" + r.name
         def area = areaFor(r)
-        def built = shapeAnnotations(collection, prefix, area)
+        def built = shapeAnnotations(collection, prefix, area, placementPlane(area))
         def objects = built.objects, holes = built.holes, total = collection.features.size()
         def hierarchy = data.hierarchy
         def replacing = currentTool.outputs.any { it.name == r.name && it.replace }
@@ -2129,7 +2227,7 @@ class LcDialog {
     }
 
     /** One annotation per GeoJSON feature (at most LcConst.MAX_SHAPES), and the number of polygon parts that have holes. */
-    Map shapeAnnotations(Map collection, String prefix, Map area = null) {
+    Map shapeAnnotations(Map collection, String prefix, Map area = null, ImagePlane plane = null) {
         def factory = new org.locationtech.jts.geom.GeometryFactory()
         def ring = { List points -> factory.createLinearRing(points.collect { new org.locationtech.jts.geom.Coordinate(LcArea.slideX(area, (it[0] as double) + 0.5d), LcArea.slideY(area, (it[1] as double) + 0.5d)) } as org.locationtech.jts.geom.Coordinate[]) }   // pixel centres, moved by the Image area's offset
         def objects = [], holes = 0
@@ -2142,7 +2240,7 @@ class LcDialog {
                 factory.createPolygon(ring(part[0] as List), part.drop(1).collect { ring(it as List) } as org.locationtech.jts.geom.LinearRing[])
             }
             def shape = polygons.size() == 1 ? polygons[0] : factory.createMultiPolygon(polygons as org.locationtech.jts.geom.Polygon[])
-            def obj = PathObjects.createAnnotationObject(qupath.lib.roi.GeometryTools.geometryToROI(shape, LcArea.plane(area)))
+            def obj = PathObjects.createAnnotationObject(qupath.lib.roi.GeometryTools.geometryToROI(shape, plane ?: LcArea.plane(area)))
             def label = feature.get("properties")?.get("label")   // .get(): on a map, Groovy's feature.properties and feature["properties"] give the bean properties, not the JSON key
             if (label instanceof Number && (label as double) == Math.floor(label as double)) label = (label as double).longValue()      // Gson reads every number as a double: 1.0 -> 1
             obj.name = prefix + " " + (label != null ? label : objects.size() + 1)
