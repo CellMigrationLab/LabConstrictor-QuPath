@@ -3,6 +3,7 @@
 # (the LC_HOME of the tests):  tests/ci_setup_apps.sh <work dir> [tools git ref, default main]
 #   interactions  the example app of labconstrictor-tools (labconstrictor_tools.examples.interactions)
 #   adv           tests/adversarial_app (odd input for the hints)
+#   frame         tests/frame_app (a probe tool for the coordinate-frame tests: it reports what it received and returns a point, an outline and labels)
 #   LabConstrictorPlayground  the Playground app, from its main branch, with CPU PyTorch (its device test runs a real model on the CPU)
 # Not installed: CellTracksColab and NucleiSky (their bridge is not on their main branch yet, see tests/run_gui_ci.sh).
 set -euo pipefail
@@ -18,6 +19,7 @@ export LC_HOME="$WORK/home"; mkdir -p "$LC_HOME"
 "$WORK/tools_env/bin/pip" install -q "$TOOLS" numpy pandas tifffile scipy scikit-image
 "$WORK/tools_env/bin/python" -m labconstrictor_tools register --name interactions --prefix "$WORK/tools_env" --module labconstrictor_tools.examples.interactions
 "$WORK/tools_env/bin/python" -m labconstrictor_tools register --name adv --prefix "$WORK/tools_env" --module adv_lc_tools --pythonpath "$REPO/tests/adversarial_app"
+"$WORK/tools_env/bin/python" -m labconstrictor_tools register --name frame --prefix "$WORK/tools_env" --module frame_lc_tools --pythonpath "$REPO/tests/frame_app"
 
 "${PYTHON:-python3}" -m venv --copies "$WORK/playground_env"
 "$WORK/playground_env/bin/pip" install -q --upgrade pip
