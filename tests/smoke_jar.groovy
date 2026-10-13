@@ -14,6 +14,7 @@ def fx = { Closure c ->
     if (box[1] != null) throw box[1]
     return box[0]
 }
+println "SMOKE start"
 Thread.start("lc-smoke") {
     def ok = false
     try {

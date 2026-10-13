@@ -15,5 +15,12 @@ grep -q '^app.mainclass=qupath.QuPath$' "$CFG" || { echo "FAIL QuPath.cfg has no
 sed -i "s|^app.mainclass=qupath.QuPath\$|&\napp.classpath=\$APPDIR/$(basename "$JAR")|" "$CFG"
 mkdir -p "$WORK/home"
 export LC_HOME="$WORK/home" HOME="$WORK/home" QT_QPA_PLATFORM=
-timeout --kill-after=20 "${SMOKE_TIMEOUT:-300}" xvfb-run -a -s "-screen 0 1600x1000x24" "$WORK/QuPath/bin/QuPath" -q -Dlc.qupath.test.script="$HERE/smoke_jar.groovy" | tee "$WORK/out.txt"
+# QuPath runs in its own session (setsid) so that a hang can be ended with all its child processes; its output goes to a file that is shown at the end.
+LIMIT="${SMOKE_TIMEOUT:-240}"
+setsid xvfb-run -a -s "-screen 0 1600x1000x24" "$WORK/QuPath/bin/QuPath" -q -Dlc.qupath.test.script="$HERE/smoke_jar.groovy" > "$WORK/out.txt" 2>&1 &
+PID=$!
+for ((i = 0; i < LIMIT; i++)); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done
+if kill -0 "$PID" 2>/dev/null; then echo "FAIL QuPath still running after ${LIMIT}s, ending it"; kill -TERM -- "-$PID" 2>/dev/null || true; sleep 5; kill -KILL -- "-$PID" 2>/dev/null || true; fi
+wait "$PID" 2>/dev/null || true
+tail -n 80 "$WORK/out.txt"
 grep -q '^SMOKE OK' "$WORK/out.txt"
