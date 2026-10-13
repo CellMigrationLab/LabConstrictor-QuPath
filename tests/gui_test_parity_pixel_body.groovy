@@ -1,4 +1,6 @@
 // ================================================================== GUI test body: pixel size (QP-8) (appended to the tool script by tests/run_gui_test.sh)
+// Updated for SPEC_WRONG_SCIENCE section 2 (calibration): the field is unset/auto/user (a flag set by the person's edits), an unknown source clears it, a declared default is
+// never a stand-in, pixels that are not square are unknown with a warning; the full CAL-01..20 / CAL-T1..T9 cases are in gui_test_calibration_body.groovy.
 // Needs no real app: it registers a synthetic app (only its schema is used) in the scratch LC_HOME (a folder named lhome_pixel); the registered `interactions` app (LC_SHARED_HOME) gives the Python that writes the test images (tifffile).
 import javafx.embed.swing.SwingFXUtils
 import javax.imageio.ImageIO
@@ -81,9 +83,17 @@ Thread.start("lc-gui-test") {
         def broken = FXD + "/px_broken.tif"; new File(broken).text = "this is text, not a TIFF"
         pick(dlg, "pixelapp", "Relocalize 2D"); Thread.sleep(1500)
         def refPixel = { fx { dlg.getters["reference_pixel_size_um"]() } }
+        def refField = { fx { dlg.controls["reference_pixel_size_um"] } }
+        // the person types: select all, then one key event per character (a host write through the setters is not an edit)
+        def typeInto = { String name, String text ->
+            def f = fx { dlg.controls[name] }
+            fx { f.requestFocus(); f.selectAll(); null }
+            text.each { ch -> fx { javafx.event.Event.fireEvent(f, new javafx.scene.input.KeyEvent(javafx.scene.input.KeyEvent.KEY_TYPED, ch.toString(), ch.toString(), javafx.scene.input.KeyCode.UNDEFINED, false, false, false, false)); null } }
+            Thread.sleep(150)
+        }
         def refFile = { String path -> fx { dlg.imageBoxes["reference"].value = LcDialog.FILE_CHOICE; dlg.fileFields["reference"].text = path } }
         def px = [name: "reference_pixel_size_um", pixel_size_of: "reference", label: "Reference pixel size"]
-        expect("pixel_field_starts_at_its_default", refPixel() == 0.65d, refPixel())
+        expect("pixel_field_starts_unset_not_at_its_declared_default", refPixel() == null && dlg.links["reference_pixel_size_um"].state == "unset", refPixel())      // was: starts at its default 0.65 (CAL-T8: a default is no stand-in)
         refFile(um05)
         expect("typed_file_header_fills_the_field", Math.abs(refPixel() - 0.5d) < 1e-6, refPixel())
         refFile(um025)
@@ -91,16 +101,16 @@ Thread.start("lc-gui-test") {
         refFile(cm)
         expect("a_centimetre_tiff_unit_is_read", Math.abs(refPixel() - 1.0d) < 1e-6, refPixel())
         refFile(plain)
-        expect("a_file_without_calibration_leaves_the_value", Math.abs(refPixel() - 1.0d) < 1e-6, refPixel())
+        expect("a_file_without_calibration_clears_the_field", refPixel() == null && refField().text == "", [refPixel(), refField().text])      // was: leaves the value (the value of another image must not stay, CAL-T5)
         // an edited value is kept when the image changes
-        fx { dlg.setters["reference_pixel_size_um"](0.9d) }
+        typeInto("reference_pixel_size_um", "0.9")
         refFile(um05)
         expect("typed_value_is_not_overwritten_by_another_file", refPixel() == 0.9d, refPixel())
         fx { dlg.fillPixelSize(px) }
         expect("typed_value_is_not_overwritten_by_a_refill", refPixel() == 0.9d, refPixel())
-        // the query field is independent
+        // the query field is independent: nothing was chosen for it, so it is unset (its declared default 0.325 is no stand-in)
         def queryBefore = fx { dlg.getters["query_pixel_size_um"]() }
-        expect("the_other_pixel_field_was_not_touched", queryBefore == 0.325d, queryBefore)
+        expect("the_other_pixel_field_was_not_touched", queryBefore == null, queryBefore)
         // a field never edited follows again after the tool is chosen anew
         pick(dlg, "pixelapp", "Relocalize 2D")
         fx { dlg.onTool() }; Thread.sleep(500)
@@ -110,15 +120,13 @@ Thread.start("lc-gui-test") {
         refFile(aniso)
         def st = status(dlg)
         println "STATUS_ANISO " + st
-        expect("anisotropic_pixels_are_said", st.contains("pixel size differs: Y 0.25 µm, X 0.5 µm - the tool takes one value and gets X"), st)
-        expect("anisotropic_pixels_send_x", Math.abs(refPixel() - 0.5d) < 1e-6, refPixel())
+        expect("anisotropic_pixels_are_said", st.contains("pixels are not square"), st)      // was: "pixel size differs: Y 0.25 µm, X 0.5 µm - the tool takes one value and gets X"
+        expect("anisotropic_pixels_leave_the_field_unset", refPixel() == null, refPixel())      // was: the field gets X (CAL-06: never filled from one axis)
         refFile(um05)
-        expect("square_pixels_say_nothing", !status(dlg).contains("pixel size differs") || status(dlg) == st, status(dlg))
-        // a file that cannot be read: said, the field keeps its value
-        fx { dlg.setters["reference_pixel_size_um"](0.5d) }
-        fx { dlg.autoPixel["reference_pixel_size_um"] = 0.5d }
+        expect("square_pixels_say_nothing", !status(dlg).contains("pixels are not square") || status(dlg) == st, status(dlg))
+        // a file that cannot be read: said, the field is unset (the value of another source must not stay)
         refFile(broken)
-        expect("unreadable_file_is_said_and_value_kept", status(dlg).startsWith("could not read the pixel size from " + broken) && status(dlg).endsWith("): type it") && refPixel() == 0.5d, status(dlg))
+        expect("unreadable_file_is_said_and_the_field_is_unset", status(dlg).startsWith("could not read the pixel size from " + broken) && status(dlg).endsWith("): type it") && refPixel() == null, status(dlg))      // was: "... and value kept"
         expect("unreadable_file_is_logged", LcLog.recent.any { it.contains("pixel size of 'File...' could not be read") }, LcLog.recent)
         // a path still being typed (no such file yet) says nothing
         fx { dlg.status.text = "idle" }

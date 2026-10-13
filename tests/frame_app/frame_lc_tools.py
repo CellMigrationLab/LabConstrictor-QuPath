@@ -1,10 +1,10 @@
-"""Test tool for the coordinate-frame tests (CF-01..14): it reports what it RECEIVED (image shape, pixel values, mask) and returns results at positions the test chooses.
+"""Test tools for the coordinate-frame (CF-01..14) and calibration (CAL-01..20, CAL-T1..T9) tests: it reports what it RECEIVED (image shape, pixel values, mask) and returns results at positions the test chooses.
 
 The tool never sees a world, slide or viewer coordinate: it gets the exported file only (SPEC_WRONG_SCIENCE 1.1.1), so what it reports is the host's export."""
 from typing import Annotated, Optional
 
 import numpy as np
-from labconstrictor_tools import ApplyTo, Image, LabelsOut, Labels, MessageOut, Name, PointsOut, RegionOf, Replace, Scalars, ShapesOut, tool
+from labconstrictor_tools import ApplyTo, Image, LabelsOut, Labels, MessageOut, Name, PixelSizeOf, PointsOut, RegionOf, Replace, Scalars, ShapesOut, Unit, tool
 
 
 @tool("Frame probe")
@@ -35,3 +35,21 @@ def probe(
     x0, x1, y0, y1 = cols.min() - 0.5, cols.max() + 0.5, rows.min() - 0.5, rows.max() + 0.5
     box = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"label": 1}, "geometry": {"type": "Polygon", "coordinates": [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]}}]}
     return seen, [{"y": float(y), "x": float(x)}], box, labels, "probed"
+
+
+@tool("Pixel size required")
+def pixel_required(
+    image: Image,
+    pixel_size: Annotated[float, PixelSizeOf("image"), Unit("um/px")] = 1.0,  # a declared default that must never stand in for a missing calibration (CAL-T8)
+) -> Annotated[Scalars, Name("seen")]:
+    """Report the pixel size it received (the number the host sent in the manifest parameter)."""
+    return {"pixel_size": float(pixel_size), "image_shape": [int(n) for n in np.asarray(image).shape]}
+
+
+@tool("Pixel size optional")
+def pixel_optional(
+    image: Image,
+    pixel_size: Annotated[Optional[float], PixelSizeOf("image"), Unit("um/px")] = None,
+) -> Annotated[Scalars, Name("seen")]:
+    """Report the pixel size it received: null when the host had no calibration."""
+    return {"pixel_size": None if pixel_size is None else float(pixel_size), "image_shape": [int(n) for n in np.asarray(image).shape]}

@@ -7,7 +7,7 @@
  *
  * Use it as the extension jar (Extensions > LabConstrictor tools...) or paste it in the Script Editor and run it.
  *
- * Sections, in file order: logging (LcLog), JSON (LcJson), registry and trust checks (LcRegistry), the worker (LcWorker), the dialog (LcDialog:
+ * Sections, in file order: logging (LcLog), JSON (LcJson), image area (LcArea), calibration (LcUnits, LcCal, LcTiff, LcLink), registry and trust checks (LcRegistry), the worker (LcWorker), the dialog (LcDialog:
  * form, copy as command, request, running, results) and the entry point.
  */
 import com.google.gson.Gson
@@ -35,6 +35,8 @@ import javafx.scene.image.ImageView
 import javafx.util.Duration
 import java.awt.image.BufferedImage
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Files
 import java.util.concurrent.BlockingQueue
 import java.util.concurrent.LinkedBlockingQueue
@@ -285,6 +287,369 @@ class LcArea {
     static String describe(Map area) {
         return area.kind + " (x " + area.x0 + ", y " + area.y0 + ", " + area.width + " x " + area.height + " px)"
     }
+}
+
+// ---------------------------------------------------------------------------------------------------- calibration (SPEC_WRONG_SCIENCE section 2)
+/** The unit catalog of conformance.json (`wrong_science.calibration`), loaded once; this script keeps no list of units of its own. The file is the one of the installed
+ *  labconstrictor-tools: `python -m labconstrictor_tools.conformance --path`, run with the interpreter of a registered app (or the file named by the environment variable
+ *  LC_CONFORMANCE, which the tests may set). Matching rule (2.1.4): symbols are exact text (case-sensitive, nothing trimmed), words are matched case-insensitively after
+ *  trimming; text in neither list is an unknown unit and gives an unknown calibration. A catalog that cannot be loaded makes every calibration unknown (said once): the
+ *  number alone is never evidence. */
+class LcUnits {
+    static final String CONFORMANCE_ENV = "LC_CONFORMANCE"
+    static final String NOT_SQUARE_TEXT = "pixels are not square"                          // conformance messages.pixels_not_square_warning
+    static final String NOT_A_LENGTH_TEXT = "unit '{unit}' is not a length"                // messages.unit_not_length_warning
+    static final String DAMAGED_TEXT = "unit text '{unit}' is damaged; enter the pixel size"      // messages.unit_damaged_warning
+    static final String CALIBRATION_REQUIRED = "'{param}' needs a value: '{of}' has no pixel size. Enter it in um."      // messages.calibration_required
+    static final String NOT_CALIBRATED_TOOLTIP = "not calibrated: '{of}' has no pixel size"        // messages.calibration_unknown_tooltip
+    static final String NO_CATALOG_TEXT = "the unit catalog of labconstrictor-tools could not be loaded (update the app's labconstrictor-tools); enter the pixel size"
+    static final String DAMAGED_PREFIX = "�"                                           // a micro sign that was damaged on its way here
+    static final Set<String> NO_UNIT = ["", "pixel", "pixels", "px", "dimensionless", "none"] as Set      // text that says "no physical unit": unknown, and not worth a warning
+    static final int PROCESS_SECONDS = 30
+    private static List<Map> apps = []          // registry entries whose interpreter can give the conformance file
+    private static Map data = null              // the parsed conformance file
+    private static Map catalogs = null          // [symbols: text -> um, words: text -> um]
+
+    /** The registered apps whose interpreter may be asked for the conformance file (a call with other apps forgets the loaded catalog only when none was loaded). */
+    static synchronized void useApps(Collection entries) {
+        apps = entries.findAll { it != null } as List<Map>
+    }
+
+    /** Forgets the loaded catalog (tests that change LC_CONFORMANCE or the apps). */
+    static synchronized void reset() { data = null; catalogs = null }
+
+    /** The parsed conformance file, or null (logged once) when no source could give it. */
+    static synchronized Map conformance() {
+        if (data != null) return data
+        def candidates = []
+        def fromEnv = System.getenv(CONFORMANCE_ENV)
+        if (fromEnv) candidates << new File(fromEnv)
+        for (entry in apps) {
+            def path = pathFrom(entry)
+            if (path != null) candidates << new File(path)
+            if (path != null) break         // the first app that answers: every app of one machine ships the same file format
+        }
+        for (file in candidates) {
+            try { data = LcJson.parse(file) as Map; return data }
+            catch (Exception e) { LcLog.warn("conformance file " + file + " could not be read", e) }      // broad on purpose: a damaged file is the same as none
+        }
+        LcLog.once("no-conformance", "no conformance file: " + NO_CATALOG_TEXT)
+        return null
+    }
+
+    /** `python -m labconstrictor_tools.conformance --path` of one app's interpreter, or null. */
+    static String pathFrom(Map entry) {
+        try {
+            def process = new ProcessBuilder([entry.python as String, "-m", "labconstrictor_tools.conformance", "--path"]).redirectErrorStream(false).start()
+            def out = process.inputStream.getText("UTF-8").trim()
+            if (!process.waitFor(PROCESS_SECONDS, TimeUnit.SECONDS)) { process.destroyForcibly(); return null }
+            return process.exitValue() == 0 && out ? out.readLines().last().trim() : null
+        } catch (IOException e) {      // the interpreter cannot be started
+            LcLog.warn("the conformance file could not be asked from " + entry.python, e)
+            return null
+        }
+    }
+
+    /** The calibration section of the conformance file (null without a catalog). */
+    static Map calibrationData() { return conformance()?.wrong_science?.calibration as Map }
+
+    private static synchronized Map catalog() {
+        if (catalogs != null) return catalogs
+        def section = calibrationData()
+        if (section == null) return null
+        def symbols = [:], words = [:]
+        section.length_units.each { name, entry ->
+            double factor = entry.um_per_unit as double
+            entry.symbols.each { symbols[it as String] = factor }
+            entry.words.each { words[it as String] = factor }
+        }
+        catalogs = [symbols: symbols, words: words]
+        return catalogs
+    }
+
+    /** [micrometres per unit, warning] for a unit text. [null, null] is "no unit" (pixel, empty); [null, warning] a unit that is not in the catalog or is damaged. The factor is never guessed. */
+    static List unitFactor(Object unit) {
+        String text = unit == null ? "" : unit.toString()
+        if (text.contains(DAMAGED_PREFIX)) return [null, DAMAGED_TEXT.replace("{unit}", text)]
+        def known = catalog()
+        if (known == null) return [null, NO_CATALOG_TEXT]
+        if (known.symbols.containsKey(text)) return [known.symbols[text], null]       // exact: 'UM', ' um', 'mms' are not symbols
+        String word = text.trim().toLowerCase(Locale.ROOT)
+        if (known.words.containsKey(word)) return [known.words[word], null]
+        return word in NO_UNIT ? [null, null] : [null, NOT_A_LENGTH_TEXT.replace("{unit}", text)]
+    }
+
+    /** 72 or 96 dpi (28.35 or 37.80 per cm), within the tolerance of the conformance file: what software writes when nobody calibrated the image. */
+    static boolean defaultLooking(double resolution, boolean perInch) {
+        def rule = calibrationData()?.default_resolution_dpi
+        if (rule == null) return true           // no rule to compare with: a resolution tag alone is not trusted
+        def defaults = perInch ? rule.values : rule.per_cm
+        return defaults.any { Math.abs(resolution - (it as double)) <= (rule.tolerance_relative as double) * (it as double) }
+    }
+}
+
+/** The pixel size of one source: `y` and `x` are micrometres per pixel, or null when unknown (`warning` may say why); `raw` keeps what the source said, [[scale, unit], [scale, unit]] for y and x. */
+class LcCal {
+    final Double y, x
+    final List raw
+    final String warning
+    LcCal(Double y, Double x, List raw, String warning = null) { this.y = y; this.x = x; this.raw = raw; this.warning = warning }
+
+    static final LcCal UNKNOWN = new LcCal(null, null, [[null, null], [null, null]])
+
+    boolean isKnown() { return y != null && x != null }
+
+    /** Y and X differ by at most the tolerance, relative to the larger. */
+    boolean isSquare() { return known && Math.abs(y - x) <= LcConst.SQUARE_PIXEL_TOLERANCE * Math.max(Math.abs(y), Math.abs(x)) }
+
+    /** What the scalar pixel-size field takes: the mean of X and Y when they agree within the tolerance, else null (unknown). The field is never filled from one axis. */
+    Double getFieldValue() { return known && square ? (y + x) / 2d : null }
+
+    /** The warning to show: why the source is unknown when it is a problem (not just "no calibration"), or that the pixels are not square. */
+    String getNote() { return warning ?: (known && !square ? LcUnits.NOT_SQUARE_TEXT : null) }
+
+    /** Each axis is (scale, unit text): scale times the unit's size in micrometres, or unknown. */
+    static LcCal calibrate(Object yScale, Object yUnit, Object xScale, Object xUnit) {
+        def raw = [[number(yScale), yUnit == null ? null : yUnit.toString()], [number(xScale), xUnit == null ? null : xUnit.toString()]]
+        def sizes = []
+        for (axis in [[yScale, yUnit], [xScale, xUnit]]) {
+            def (factor, warning) = LcUnits.unitFactor(axis[1])
+            def n = number(axis[0])
+            if (factor == null || n == null || n <= 0d) return new LcCal(null, null, raw, warning as String)
+            sizes << n * (factor as double)
+        }
+        return new LcCal(sizes[0] as Double, sizes[1] as Double, raw)
+    }
+
+    static Double number(Object v) {
+        if (v == null) return null
+        try { double d = (v instanceof Number) ? (v as Number).doubleValue() : Double.parseDouble(v.toString().trim()); return Double.isFinite(d) ? d : null }
+        catch (NumberFormatException e) { return null }       // text that is not a number is no number
+    }
+
+    /** The pixel size of an image server: its PixelCalibration through the catalog, except for an unedited local TIFF, which says it through its own tags (see ofTiffFile). */
+    static LcCal ofServer(def server) {
+        def pc = server.pixelCalibration
+        def fromServer = calibrate(pc.pixelHeight, pc.pixelHeightUnit, pc.pixelWidth, pc.pixelWidthUnit)
+        def file = localTiff(server)
+        if (file == null || calibrationEdited(server)) return fromServer      // a calibration the person entered in QuPath is explicit: kept
+        try { return ofTiffFile(file) }
+        catch (IOException e) { LcLog.warn("TIFF header of " + file + " could not be read (the calibration of the server is used)", e); return fromServer }
+    }
+
+    /** The local file behind a server when it is a TIFF (by its header), else null. */
+    static File localTiff(def server) {
+        try {
+            def uri = server.URIs?.find { it.scheme == "file" }
+            if (uri == null) return null
+            def file = new File(uri)
+            LcTiff.tags(file)
+            return file
+        } catch (IOException | RuntimeException e) {      // not a local file, or not a TIFF: the server's own calibration is used
+            return null
+        }
+    }
+
+    /** The calibration in the server's metadata differs from the one the reader found: somebody entered it in QuPath. */
+    static boolean calibrationEdited(def server) {
+        try { return server.metadata.pixelCalibration != server.originalMetadata.pixelCalibration }
+        catch (RuntimeException e) { LcLog.warn("could not compare the calibration of the server with its original", e); return false }
+    }
+
+    /** The pixel size of a file: a TIFF by its tags (OME or ImageJ unit first, resolution tags only when they are not a 72 / 96 dpi default), any other file by its server. */
+    static LcCal ofFile(String path) {
+        def file = new File(path)
+        try { return ofTiffFile(file) } catch (IOException e) { LcLog.warn("not read as a TIFF: " + path + " (" + e.message + ")") }
+        def server = ImageServers.buildServer(file.toURI().toString())
+        def cal
+        try { cal = ofServer(server) } finally { server.close() }
+        return cal
+    }
+
+    /** A TIFF's own metadata (SPEC 2.1.6): an OME physical size or an ImageJ `unit=` wins over the resolution tags; tags alone count only when ResolutionUnit is INCH or
+     *  CENTIMETER and the resolution does not look like a 72 / 96 dpi default; NONE is unknown. Throws IOException for a file that is not a readable TIFF. */
+    static LcCal ofTiffFile(File file) {
+        def t = LcTiff.tags(file)
+        def ome = omePixelSizes(t.description as String)
+        if (ome != null) return calibrate(ome[0][0], ome[0][1], ome[1][0], ome[1][1])
+        if (t.xres == null) return UNKNOWN
+        double perX = t.xres[0] / t.xres[1], sizeX = t.xres[1] / t.xres[0]
+        def yres = t.yres ?: t.xres          // a missing YResolution means square
+        double perY = yres[0] / yres[1], sizeY = yres[1] / yres[0]
+        def unit = imageJUnit(t.description as String)
+        if (unit) return calibrate(sizeY, unit, sizeX, unit)       // ImageJ's own unit text names the unit, the tags give the number
+        int code = t.unit == null ? 2 : (t.unit as int)             // no ResolutionUnit tag: the TIFF default, INCH
+        if (code != 2 && code != 3) return UNKNOWN                  // NONE (or odd): the number has no unit
+        String name = code == 2 ? "inch" : "centimeter"
+        def raw = [[sizeY, name], [sizeX, name]]
+        if (LcUnits.defaultLooking(perX, code == 2) || LcUnits.defaultLooking(perY, code == 2)) return new LcCal(null, null, raw)
+        double factor = code == 2 ? 25400d : 10000d
+        return new LcCal(sizeY * factor, sizeX * factor, raw)
+    }
+
+    /** [[sizeY, unitY], [sizeX, unitX]] of the first <Pixels> element of an OME-XML description, or null without a physical size. A missing PhysicalSizeY means square; a size
+     *  without a unit text is unknown to the caller (the number alone is no evidence). */
+    static List omePixelSizes(String description) {
+        if (description == null || !description.contains("<OME")) return null
+        def m = description =~ /<(?:\w+:)?Pixels\b[^>]*>/
+        if (!m.find()) return null
+        String element = m.group()
+        def attr = { String name -> def a = element =~ (/\b/ + name + /\s*=\s*"([^"]*)"/); a.find() ? xmlText(a.group(1)) : null }
+        def sx = attr("PhysicalSizeX")
+        if (sx == null) return null
+        def ux = attr("PhysicalSizeXUnit")
+        def sy = attr("PhysicalSizeY")
+        return [[sy ?: sx, sy != null ? attr("PhysicalSizeYUnit") : ux], [sx, ux]]
+    }
+
+    static String xmlText(String s) {
+        return s.replaceAll(/&#x([0-9A-Fa-f]+);/) { all, hex -> new String(Character.toChars(Integer.parseInt(hex as String, 16))) }
+                .replaceAll(/&#(\d+);/) { all, dec -> new String(Character.toChars(Integer.parseInt(dec as String))) }
+                .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&apos;", "'").replace("&amp;", "&")
+    }
+
+    /** The `unit=` of an ImageJ description ("ImageJ=1.x" first line), with \uXXXX escapes decoded; null without one. */
+    static String imageJUnit(String description) {
+        if (description == null || !description.startsWith("ImageJ=")) return null
+        def line = description.readLines().find { it.startsWith("unit=") }
+        if (line == null) return null
+        def text = line.substring(5).replaceAll(/\\u([0-9A-Fa-f]{4})/) { all, hex -> new String(Character.toChars(Integer.parseInt(hex as String, 16))) }
+        return text ?: null
+    }
+}
+
+/** The few tags of the first page of a TIFF (classic or BigTIFF) the calibration needs: ImageDescription, XResolution, YResolution, ResolutionUnit. Read without decoding any pixel. */
+class LcTiff {
+    static final int TAG_DESCRIPTION = 270, TAG_XRES = 282, TAG_YRES = 283, TAG_UNIT = 296
+    static final int MAX_DESCRIPTION_BYTES = 64 * 1024 * 1024
+    static final int MAX_ENTRIES = 4096
+
+    /** [description, xres: [numerator, denominator], yres, unit] of the first page; IOException when the file is not a TIFF or its first page cannot be read. */
+    static Map tags(File file) {
+        def raf = new RandomAccessFile(file, "r")
+        try {
+            def ch = raf.channel
+            def head = read(ch, 0L, 16, ByteOrder.BIG_ENDIAN)
+            if (head == null) throw new IOException("not a TIFF (too short)")
+            int b0 = head.get(0), b1 = head.get(1)
+            ByteOrder order = (b0 == 0x49 && b1 == 0x49) ? ByteOrder.LITTLE_ENDIAN : (b0 == 0x4D && b1 == 0x4D) ? ByteOrder.BIG_ENDIAN : null
+            if (order == null) throw new IOException("not a TIFF (no byte order mark)")
+            head.order(order)
+            int magic = head.getShort(2) & 0xffff
+            boolean big = magic == 43
+            if (!big && magic != 42) throw new IOException("not a TIFF (bad magic number " + magic + ")")
+            long ifd = big ? head.getLong(8) : (head.getInt(4) & 0xffffffffL)
+            def countBuf = read(ch, ifd, big ? 8 : 2, order)
+            if (countBuf == null) throw new IOException("TIFF: the first page lies outside the file")
+            long entries = big ? countBuf.getLong(0) : (countBuf.getShort(0) & 0xffffL)
+            if (entries <= 0 || entries > MAX_ENTRIES) throw new IOException("TIFF: odd number of tags in the first page: " + entries)
+            int entrySize = big ? 20 : 12, inline = big ? 8 : 4
+            def out = [description: null, xres: null, yres: null, unit: null]
+            for (long i = 0; i < entries; i++) {
+                long at = ifd + (big ? 8 : 2) + i * entrySize
+                def e = read(ch, at, entrySize, order)
+                if (e == null) throw new IOException("TIFF: a tag lies outside the file")
+                int tag = e.getShort(0) & 0xffff, type = e.getShort(2) & 0xffff
+                long count = big ? e.getLong(4) : (e.getInt(4) & 0xffffffffL)
+                if (!(tag in [TAG_DESCRIPTION, TAG_XRES, TAG_YRES, TAG_UNIT])) continue
+                long size = count * typeSize(type)
+                long data = size <= inline ? at + (big ? 12 : 8) : (big ? e.getLong(12) : (e.getInt(8) & 0xffffffffL))
+                if (tag == TAG_DESCRIPTION && type == 2) {
+                    if (size > MAX_DESCRIPTION_BYTES) continue
+                    def bytes = read(ch, data, (int) size, order)
+                    if (bytes != null) out.description = new String(bytes.array(), 0, (int) size, "UTF-8").replace("\u0000", "")
+                } else if ((tag == TAG_XRES || tag == TAG_YRES) && type == 5 && count >= 1) {
+                    def r = read(ch, data, 8, order)
+                    if (r != null) {
+                        long num = r.getInt(0) & 0xffffffffL, den = r.getInt(4) & 0xffffffffL
+                        if (num != 0 && den != 0) out[tag == TAG_XRES ? "xres" : "yres"] = [num as double, den as double]
+                    }
+                } else if (tag == TAG_UNIT && (type == 3 || type == 4) && count >= 1) {
+                    def r = read(ch, data, type == 3 ? 2 : 4, order)
+                    if (r != null) out.unit = type == 3 ? (r.getShort(0) & 0xffff) : r.getInt(0)
+                }
+            }
+            return out
+        } finally { raf.close() }
+    }
+
+    static int typeSize(int type) { return [1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 16: 8, 17: 8, 18: 8].get(type, 1) }
+
+    /** `length` bytes at `position`, or null when they are not all in the file. */
+    static ByteBuffer read(def channel, long position, int length, ByteOrder order) {
+        if (position < 0 || position + length > channel.size()) return null
+        def buf = ByteBuffer.allocate(length)
+        while (buf.hasRemaining()) { if (channel.read(buf, position + buf.position()) < 0) return null }
+        buf.flip()
+        buf.order(order)
+        return buf
+    }
+}
+
+/** The state of a linked pixel-size field (SPEC 2.2) and the `_calibration` entry of a request (2.3.4). A `PixelSizeOf` field is unset, auto(source, value) or user(value).
+ *  The state is a flag set by the person's edit events (userEdit), never inferred by comparing the field with the last automatic value, and a programmatic set
+ *  (sourceChanged) never makes it user. The value a run sends is read from here, not from the box. */
+class LcLink {
+    static final String UNSET = "unset", AUTO = "auto", USER = "user"
+    static final String CANONICAL_UNIT = "um"       // micrometres per pixel: the contract of PixelSizeOf
+    final String param, of           // the manifest parameter and the image parameter it describes
+    String state = UNSET
+    LcCal cal                        // the source the AUTO value came from
+    String source                    // "image" | "file" (where `cal` came from)
+    Double user
+    String invalid                   // text the person typed that is not a number (state USER, no value): a run refuses it by name
+
+    LcLink(String param, String of) { this.param = param; this.of = of }
+
+    /** The image, the file or the project image changed (or the field is derived again). True when the field's value may have changed. A user value stays; otherwise the field
+     *  takes the new source's value, or is cleared when the source is unknown. */
+    boolean sourceChanged(LcCal derived, String from) {
+        if (state == USER) return false
+        if (derived != null && derived.fieldValue != null) { state = AUTO; cal = derived; source = from }
+        else { state = UNSET; cal = null; source = null }
+        return true
+    }
+
+    /** The person typed or pasted a value. An empty text is the person asking for the image's calibration again: unset, and the caller derives it from the current source. */
+    void userEdit(Double value) {
+        invalid = null
+        if (value == null) { state = UNSET; user = null; cal = null; source = null }
+        else { state = USER; user = value }       // 0, a negative or a non-finite number is the person's too; a run refuses it by name
+    }
+
+    Double getValue() {
+        if (state == USER) return user
+        return state == AUTO && cal != null ? cal.fieldValue : null
+    }
+
+    String getOrigin() { return state == USER ? USER : (cal != null ? source : null) }
+
+    /** The `_calibration` entry of this field (2.3.4), or null while it has no value. Phase 1: x and y only. */
+    Map entry() {
+        Double v = value
+        if (v == null) return null
+        def axis = { double number, String from, List raw ->
+            def a = [value: number, unit: CANONICAL_UNIT, source: from]
+            if (raw != null && (raw[0] != null || raw[1] != null)) a.raw = [scale: raw[0], unit: raw[1]]
+            a
+        }
+        def axes
+        if (state == USER || cal == null || !cal.known) axes = [x: axis(v, USER, null), y: axis(v, USER, null)]
+        else axes = [x: axis(cal.x, source, cal.raw[1] as List), y: axis(cal.y, source, cal.raw[0] as List)]
+        return [of: of, source: origin, axes: axes]
+    }
+
+    String tooltip() {
+        Double v = value
+        if (state == USER && v != null) return String.format(Locale.ROOT, "%s um per pixel, entered by you: it overrides the calibration of '%s'", LcLink.plain(v), of)
+        if (state == AUTO && cal != null && v != null) return LcLink.plain(v) + " um per pixel, from the calibration of " + (source == "file" ? "the file" : "'" + of + "'")
+        return LcUnits.NOT_CALIBRATED_TOOLTIP.replace("{of}", of)
+    }
+
+    String requiredMessage() { return LcUnits.CALIBRATION_REQUIRED.replace("{param}", param).replace("{of}", of) }
+
+    /** A number as short as it can be written exactly (0.25, 1, 0.5002), never 1.0E-4. */
+    static String plain(double v) { return new BigDecimal(Double.toString(v)).stripTrailingZeros().toPlainString() }
 }
 
 // ---------------------------------------------------------------------------------------------------- registry and trust checks
@@ -705,7 +1070,10 @@ class LcDialog {
     volatile Map<String, Map> framesAtRun = [:]        // image parameter -> [width, height] of what the tool received (SPEC 1.1.7: a result that says ApplyTo and has another size is said)
     List<String> resultNotes = []                      // sentences about the results of the last run that go to the status line (e.g. size_mismatch), said once
     Map<String, String> imageOf = [:]            // pixel-size parameter -> image parameter
-    Map<String, Double> autoPixel = [:]          // pixel-size parameter -> the value the host last wrote (a different value in the box was typed by the person)
+    Map<String, LcLink> links = [:]              // pixel-size parameter -> the state of its field (unset / auto / user), a flag set by the person's edits (SPEC 2.2)
+    volatile Map<String, Map> calibrationAtRun = [:]     // pixel-size parameter -> its `_calibration` entry, frozen when the request was read (SPEC 2.3.4)
+    List imageDataListeners = []                 // listeners on QuPath's image property (removed when the window closes)
+    boolean programmatic = false                 // true while the host writes a pixel-size field (such a write is never a person's edit)
     Map<String, TextField> fileFields = [:]      // image parameter -> the field for a file path
     LcWorker worker
     String workerApp
@@ -717,6 +1085,7 @@ class LcDialog {
         this.qupath = qupath
         this.apps = registry.apps
         this.problems = registry.problems
+        LcUnits.useApps(apps.values().collect { it.entry })      // the unit catalog comes from the labconstrictor-tools of a registered app
     }
 
     // ---- the form: window and top-level wiring
@@ -731,7 +1100,7 @@ class LcDialog {
             status.text = "No LabConstrictor app is registered on this machine." + (problems ? " Skipped: " + problems.join("; ") : "")
         }
         stage.scene = new Scene(root)
-        stage.onHidden = { stopWorker(false) }   // also when closed from code
+        stage.onHidden = { stopWorker(false); imageDataListeners.each { qupath?.imageDataProperty()?.removeListener(it as javafx.beans.value.ChangeListener) } }   // also when closed from code
         stage.show()
         if (!apps.isEmpty()) appBox.value = apps.keySet().first()
     }
@@ -832,7 +1201,7 @@ class LcDialog {
         def app = apps[appBox.value]
         currentTool = app ? toolNames(app.schema.tools)[toolBox.value] : null
         formBox.children.clear()
-        getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); areaBoxes.clear(); imageOf.clear(); selectionBoxes.clear(); autoPixel.clear(); fileFields.clear()
+        getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); areaBoxes.clear(); imageOf.clear(); selectionBoxes.clear(); links.clear(); fileFields.clear()
         checks.clear(); choiceBoxes.clear(); choiceSeq.clear(); channelBoxes.clear()
         description.text = currentTool?.description ?: ""
         if (currentTool == null) return
@@ -947,6 +1316,7 @@ class LcDialog {
         currentTool.inputs.findAll { it.clear_after_run }.each { p ->
             checks[p.name]?.selected = false
             choiceBoxes[p.name]?.value = ""
+            if (p.pixel_size_of && links[p.name] != null) { links[p.name].userEdit(null); fillPixelSize(p); return }      // a linked pixel size starts again from its image, never from the declared default
             def start = p.default != null ? p.default : (p.type == "string" ? "" : null)
             if (start != null && p.type != "image" && p.type != "labels") setters[p.name](start)
         }
@@ -1068,7 +1438,7 @@ class LcDialog {
             case "boolean": built = booleanControl(p); break
             case "choice": built = choiceControl(p); break
             case "integer": built = integerControl(p); break
-            case "float": built = floatControl(p); break
+            case "float": built = p.pixel_size_of ? pixelSizeControl(p) : floatControl(p); break
             case "image":
             case "labels": built = imageControl(p, sources); break
             case "file":
@@ -1078,7 +1448,7 @@ class LcDialog {
         }
         Node node = built.node
         Closure get = built.get, set = built.set
-        if (p.nullable && !p.region_of) {      // optional without a default: unticked = the tool receives None (a region has its own 'use the selection' box)
+        if (p.nullable && !p.region_of && !p.pixel_size_of) {      // optional without a default: unticked = the tool receives None (a region has its own 'use the selection' box; a linked pixel size has its own state: unset sends null)
             def check = new CheckBox("set")
             checks[name] = check
             def control = node
@@ -1375,64 +1745,105 @@ class LcDialog {
         update()
     }
 
-    /** PixelSizeOf: refill the pixel size whenever another image is chosen or another file is typed, until the person edits the field (the Napari rule). */
-    void hookPixelSize(Map p) {
+    /** The control of a linked pixel-size field (PixelSizeOf, SPEC 2.2): a text box that shows the calibration of the chosen image or file, or nothing ("(not set)") when that is
+     *  unknown, and a button that asks for the image's calibration again. What a run sends is the state in `links`, not the text. A write by the host is never an edit by the person:
+     *  `programmatic` guards the text listener; typed or pasted text (also the same text again, through the key event) makes the value the person's. */
+    Map pixelSizeControl(Map p) {
+        def name = p.name as String
+        def field = new TextField()
+        field.promptText = "(not set)"
+        field.prefColumnCount = 10
+        def link = new LcLink(name, p.pixel_size_of as String)
+        links[name] = link
+        controls[name] = field
+        field.textProperty().addListener({ o, a, b -> if (!programmatic) pixelTextEdited(p) } as javafx.beans.value.ChangeListener)
+        field.addEventFilter(javafx.scene.input.KeyEvent.KEY_TYPED, { e -> if (!programmatic) Platform.runLater { pixelTextEdited(p) } } as javafx.event.EventHandler)      // typing the text the box already shows changes no text, but is still an edit
+        field.focusedProperty().addListener({ o, was, now -> if (!now && link.state == LcLink.UNSET && !field.text?.trim()) fillPixelSize(p) } as javafx.beans.value.ChangeListener)      // left empty: the image's calibration again
+        def useImage = new Button("Use the image's calibration")
+        useImage.onAction = { link.userEdit(null); fillPixelSize(p) }
+        return [node: new HBox(6, field, useImage), get: { link.value }, set: { writePixelText(p, it as Double) }]
+    }
+
+    /** The host writes `value` into a pixel-size field (null empties it): the state is not touched. */
+    void writePixelText(Map p, Double value) {
+        def field = controls[p.name] as TextField
+        programmatic = true
+        try { field.text = value == null ? "" : LcLink.plain(value) } finally { programmatic = false }
+    }
+
+    /** The person typed, pasted or deleted in a pixel-size field: the state becomes theirs. An empty box is "unset" (the image's calibration is taken again when the box loses the focus or a run starts); text that
+     *  is not a number is kept as typed, and a run refuses it by name. */
+    void pixelTextEdited(Map p) {
+        def link = links[p.name as String]
+        def field = controls[p.name] as TextField
+        if (link == null || field == null) return
+        def text = field.text?.trim()
+        if (!text) { link.userEdit(null); return }
+        def number = LcCal.number(text)
+        if (number == null) { link.userEdit(null); link.state = LcLink.USER; link.invalid = text; return }      // text that is not a number: the person's, and refused at the run
+        link.userEdit(number)
+    }
+
+    /** The calibration of what the field describes now, as [cal, source, label] or null (nothing to read yet): the file when the image input is a file (the file wins over the open
+     *  image), else the chosen QuPath image. An image that cannot be read is said and counts as unknown: the value of another image is never kept. */
+    Map deriveCalibration(Map p) {
         def box = imageBoxes[p.pixel_size_of]
-        if (box == null) return
-        autoPixel[p.name as String] = readPixelField(p)      // what the field holds now counts as "not edited"
-        box.valueProperty().addListener({ o, a, b -> fillPixelSize(p) } as javafx.beans.value.ChangeListener)
-        fileFields[p.pixel_size_of]?.textProperty()?.addListener({ o, a, b -> fillPixelSize(p) } as javafx.beans.value.ChangeListener)
-    }
-
-    /** The number now in a pixel-size field, or null. */
-    Double readPixelField(Map p) {
-        def v = getters[p.name]?.call()
-        return v instanceof Number ? (v as Double) : null
-    }
-
-    /** Same number, as the box holds it (a value the host wrote and read back). */
-    static boolean sameNumber(Double a, Double b) {
-        return a == null || b == null ? a == b : Math.abs(a - b) <= 1e-9d * Math.max(Math.abs(a), Math.abs(b))
-    }
-
-    /** The calibration of the chosen image or typed file as [y, x] micrometres per pixel (null: none stored). A file that cannot be read says so and returns null. */
-    List<Double> pixelSizeOfChoice(Map p, ComboBox<String> box) {
+        if (box == null) return null
+        def choice = box.value as String
+        if (choice == null || choice == NO_IMAGE) return null
         try {
-            def server = null
-            if (box.value == FILE_CHOICE) {
+            if (choice == FILE_CHOICE) {
                 def path = fileFields[p.pixel_size_of]?.text?.trim()
-                if (!path || !new File(path).isFile()) return null          // still being typed: nothing to read yet
-                server = ImageServers.buildServer(path)
-            } else {
-                server = imageSources()[box.value]?.call()
+                return (!path || !new File(path).isFile()) ? null : [cal: LcCal.ofFile(path), source: "file", label: path]      // a path still being typed: nothing to read yet
             }
-            def cal = server?.pixelCalibration
-            return (cal != null && cal.hasPixelSizeMicrons()) ? [cal.pixelHeightMicrons, cal.pixelWidthMicrons] : null
+            def server = imageSources()[choice]?.call()
+            if (server == null) return null
+            try { return [cal: LcCal.ofServer(server), source: "image", label: choice] }
+            finally { if (!isCurrentImage(choice)) server.close() }          // the open image belongs to QuPath; a project image was opened here
         } catch (Exception e) {     // broad on purpose (any reader can fail on any file): a listener on the image chooser must never break the form; the person types the value
-            LcLog.warn("pixel size of '" + box.value + "' could not be read", e)
-            status?.text = "could not read the pixel size from " + (box.value == FILE_CHOICE ? fileFields[p.pixel_size_of]?.text?.trim() : box.value) + " (" + e.message + "): type it"
+            LcLog.warn("pixel size of '" + choice + "' could not be read", e)
+            status?.text = "could not read the pixel size from " + (choice == FILE_CHOICE ? fileFields[p.pixel_size_of]?.text?.trim() : choice) + " (" + e.message + "): type it"
             return null
         }
     }
 
-    /** The pixel size of the chosen QuPath image or file goes into its pixel-size parameter (micrometres per pixel), unless the person typed another value;
-     *  pixels that are not square are said: the tool takes one value and gets X. */
+    /** PixelSizeOf: the source changed (another image or file, or the field is derived again): an unset or automatic field takes the new source's calibration, or is cleared when that is
+     *  unknown (SPEC 2.2); a value the person entered stays. A warning (pixels not square, a unit that is not a length) goes to the status line. */
     void fillPixelSize(Map p) {
-        def box = imageBoxes[p.pixel_size_of]
-        if (box == null) return
-        def name = p.name as String
-        if (!sameNumber(readPixelField(p), autoPixel[name])) return       // edited by the person: kept
-        def yx = pixelSizeOfChoice(p, box)
-        if (yx == null) return
-        setters[name](yx[1])
-        autoPixel[name] = readPixelField(p)
-        if (Math.abs(yx[0] - yx[1]) > LcConst.SQUARE_PIXEL_TOLERANCE * Math.max(Math.abs(yx[0]), Math.abs(yx[1])))
-            status?.text = "\u26a0 pixel size differs: Y " + significant(yx[0]) + " \u00b5m, X " + significant(yx[1]) + " \u00b5m - the tool takes one value and gets X"
+        def link = links[p.name as String]
+        if (link == null || imageBoxes[p.pixel_size_of] == null) return
+        if (link.state != LcLink.USER) {
+            def derived = deriveCalibration(p)
+            link.sourceChanged(derived?.cal as LcCal, derived?.source as String)
+            link.invalid = null
+            def note = (derived?.cal as LcCal)?.note
+            if (note) status?.text = "\u26a0 " + note + " (" + derived.label + ")"
+        }
+        showLink(p)
     }
 
-    /** `value` with six significant digits and no trailing zeros, like Python's "%.6g" (0.25 not 0.250000). */
-    static String significant(double value) {
-        return new BigDecimal(value).round(new java.math.MathContext(LcConst.SIGNIFICANT_DIGITS)).stripTrailingZeros().toPlainString()
+    /** What the field shows for its state: the value (empty when unset) and the tooltip that says where it comes from. */
+    void showLink(Map p) {
+        def link = links[p.name as String]
+        def field = controls[p.name] as TextField
+        if (link.state != LcLink.USER) writePixelText(p, link.value)
+        field.tooltip = new Tooltip(link.tooltip())
+    }
+
+    /** PixelSizeOf: the field follows the chosen image, the typed file and the image open in QuPath until the person enters a value. */
+    void hookPixelSize(Map p) {
+        def box = imageBoxes[p.pixel_size_of]
+        if (box == null) return
+        def again = { o, a, b -> fillPixelSize(p) } as javafx.beans.value.ChangeListener
+        box.valueProperty().addListener(again)
+        fileFields[p.pixel_size_of]?.textProperty()?.addListener(again)
+        qupath?.imageDataProperty()?.addListener(again)      // the open image changed: "Current image" is another image now
+        imageDataListeners << again
+    }
+
+    /** A run starts: every field that is not the person's own reads its source again (a calibration may have been edited in QuPath since it was chosen). */
+    void refreshLinks() {
+        currentTool?.inputs?.findAll { it.pixel_size_of && links[it.name] != null }?.each { p -> fillPixelSize(p) }
     }
 
     // ---- copy as command (the text format of labconstrictor_tools.command, the reference). Quoting only through two helpers: shellQuote (terminal words)
@@ -1591,6 +2002,19 @@ class LcDialog {
         for (p in currentTool.inputs) {
             def v
             try { v = getters[p.name]() } catch (Exception e) { LcLog.warn("could not read '" + p.name + "'", e); status.text = "Check '" + p.label + "': " + e.message; return null }
+            if (p.pixel_size_of && links[p.name] != null) {      // a linked pixel size (SPEC 2.3): the state decides; the declared default is never a stand-in
+                def link = links[p.name]
+                if (link.invalid != null) { status.text = "'" + p.label + "': '" + link.invalid + "' is not a number"; return null }
+                if (v == null) {
+                    if (!p.nullable) { status.text = link.requiredMessage(); return null }
+                    values[p.name] = null       // Optional[float]: an unset field sends null, nothing is blocked
+                    continue
+                }
+                if (!Double.isFinite(v as double)) { status.text = "'" + p.label + "' must be a finite number"; return null }
+                if (!((v as double) > 0d)) { status.text = "'" + p.label + "' must be greater than 0 (um per pixel)"; return null }
+                values[p.name] = v
+                continue
+            }
             if (v == null) {
                 if (p.required && !p.nullable && p.type in ["image", "labels", "table", "file", "folder", "string"]) { status.text = requiredSentence(p); return null }
                 continue
@@ -1598,6 +2022,7 @@ class LcDialog {
             if (v instanceof Double && !Double.isFinite(v)) { status.text = "'" + p.label + "' must be a finite number"; return null }      // Gson cannot write NaN or infinity: refused here, with the worker's sentence
             values[p.name] = v
         }
+        calibrationAtRun = links.collectEntries { name, link -> [(name): link.entry()] }.findAll { it.value != null && values[it.key] != null } as Map      // frozen with the values
         return values
     }
 
@@ -1610,6 +2035,7 @@ class LcDialog {
     /** Run pressed: read the form, then start the run in the background. */
     void run() {
         if (running || currentTool == null) return
+        refreshLinks()
         def values = readFormValues()
         if (values == null) return
         imageChoiceAtRun = imageBoxes.collectEntries { k, b -> [(k): b.value as String] }
@@ -1741,6 +2167,8 @@ class LcDialog {
         framesAtRun = [:]
         areasAtRun = resolveAreas(values, params)       // before anything is exported: a refused area costs nothing
         values.each { name, v -> inputs[name] = prepareInput(params.find { it.name == name }, name as String, v, tmp, appName) }
+        def calibration = calibrationAtRun.findAll { name, entry -> values[name] != null }
+        if (calibration) inputs["_calibration"] = calibration      // the reserved per-axis input (SPEC 2.3.4): tools never see it, the run record keeps it
         inputs["_job_dir"] = newJobDir(appName, toolId).absolutePath
         return inputs
     }
