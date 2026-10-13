@@ -87,6 +87,11 @@ Thread.start("lc-gui-test") {
         add("CAL-14", "CENTIMETER 10000 per cm", spec([kind: "tags", resolution: [10000, 10000], resolutionunit: "CENTIMETER"]), 1.0)
         add("CAL-11", "INCH 72.2 dpi (within 0.5 %)", spec([kind: "tags", resolution: [72.2, 72.2], resolutionunit: "INCH"]), "unknown")
         add("CAL-14", "INCH 73 dpi (outside 0.5 %)", spec([kind: "tags", resolution: [73, 73], resolutionunit: "INCH"]), 25400.0 / 73)
+        // the same tags in a BigTIFF and in a big-endian TIFF: the header reader handles both
+        add("CAL-14", "BigTIFF INCH 25400 dpi", spec([kind: "tags", resolution: [25400, 25400], resolutionunit: "INCH", bigtiff: true]), 1.0)
+        add("CAL-11", "BigTIFF INCH 72 dpi", spec([kind: "tags", resolution: [72, 72], resolutionunit: "INCH", bigtiff: true]), "unknown")
+        add("CAL-14", "big-endian CENTIMETER 10000 per cm", spec([kind: "tags", resolution: [10000, 10000], resolutionunit: "CENTIMETER", byteorder: ">"]), 1.0)
+        add("CAL-12", "big-endian INCH 96 dpi", spec([kind: "tags", resolution: [96, 96], resolutionunit: "INCH", byteorder: ">"]), "unknown")
         calCase("CAL-15").input.variants.each { v -> add("CAL-15", "unit " + v.unit, ome(v.scale, v.unit, v.scale, v.unit), 0.5) }
         add("CAL-16", "damaged micro sign", ome(0.5, "�m", 0.5, "�m"), "unknown", DAMAGED("�m"))
         calCase("CAL-17").input.variants.each { v -> add("CAL-17", "unit " + v.unit, ome(v.scale, v.unit, v.scale, v.unit), 0.0001) }
@@ -299,14 +304,34 @@ Thread.start("lc-gui-test") {
         // ClearAfterRun and the declared default never stand in: after a reset the field is the image's
         reset(); chooseImage("Project: A")
         expect("the_form_starts_from_the_image_not_the_declared_default", fieldText() == "0.25" && link().state == LcLink.AUTO, [fieldText(), link().state])
-        // a calibration edited in QuPath between choosing the image and pressing Run is read again at the click (not the person's own value)
-        openImage("A"); reset(); chooseImage("Current image")
+        // a calibration edited in QuPath between choosing the image and pressing Run is read again at the click (a real run; the box is not the person's own value)
+        openImage("A"); runTool("Pixel size required"); chooseImage("Current image")
         def srv = fx { qupath.imageData.server }; def orig = fx { srv.originalMetadata }
+        def stale = fieldText()
         fx { srv.setMetadata(new qupath.lib.images.servers.ImageServerMetadata.Builder(orig).pixelSizeMicrons(0.8d, 0.8d).build()); null }
-        fx { dlg.refreshLinks(); null }
-        def rEdit = requestOf()
-        expect("a_calibration_edited_in_QuPath_is_read_again_before_the_run", rEdit.values != null && near(rEdit.values.pixel_size as double, 0.8d), [rEdit.values, fieldText()])
+        run(dlg)
+        def recEdit = recordOf()
+        expect("a_calibration_edited_in_QuPath_is_read_again_by_the_run", stale == "0.25" && near(seenOf().pixel_size as double, 0.8d) && recEdit.inputs._calibration.pixel_size.axes.x.value == 0.8d && fieldText() == "0.8", [stale, seenOf(), fieldText()])
         fx { srv.setMetadata(orig); null }
+
+        // ---- the field state machine on its own (SPEC 2.2): a flag set by edit events, never inferred by comparing values
+        def calA = LcCal.calibrate(0.25d, "um", 0.25d, "um"), calB = LcCal.calibrate(0.5d, "um", 0.5d, "um"), calNone = LcCal.calibrate(1.0d, "pixel", 1.0d, "pixel")
+        def lk = new LcLink("pixel_size", "image")
+        lk.sourceChanged(calA, "image")
+        expect("state_auto_follows_the_source", lk.state == LcLink.AUTO && lk.value == 0.25d && lk.origin == "image", [lk.state, lk.value])
+        lk.userEdit(0.25d)
+        expect("state_user_even_when_the_value_equals_the_auto_value", lk.state == LcLink.USER && lk.origin == "user", lk.state)
+        expect("state_user_survives_a_source_change", lk.sourceChanged(calB, "image") == false && lk.state == LcLink.USER && lk.value == 0.25d && lk.sourceChanged(calNone, "image") == false && lk.value == 0.25d, [lk.state, lk.value])
+        lk.userEdit(null)
+        expect("state_cleared_is_unset_until_the_source_is_read_again", lk.state == LcLink.UNSET && lk.value == null && lk.sourceChanged(calB, "file") && lk.state == LcLink.AUTO && lk.value == 0.5d && lk.origin == "file", [lk.state, lk.value])
+        lk.sourceChanged(calNone, "image")
+        expect("state_unknown_source_clears_the_value", lk.state == LcLink.UNSET && lk.value == null && lk.entry() == null, [lk.state, lk.value])
+        lk.sourceChanged(calA, "image")
+        def entry = lk.entry()
+        expect("calibration_entry_is_per_axis_with_provenance", entry == [of: "image", source: "image", axes: [x: [value: 0.25d, unit: "um", source: "image", raw: [scale: 0.25d, unit: "um"]], y: [value: 0.25d, unit: "um", source: "image", raw: [scale: 0.25d, unit: "um"]]]], entry)
+        lk.userEdit(0.3d)
+        expect("calibration_entry_of_a_typed_value_is_user_on_both_axes", lk.entry() == [of: "image", source: "user", axes: [x: [value: 0.3d, unit: "um", source: "user"], y: [value: 0.3d, unit: "um", source: "user"]]], lk.entry())
+        expect("calibration_entry_follows_the_conformance_request_shape", CAL.request_shape._calibration.pixel_size.axes.x.keySet() == (["value", "unit", "source", "raw"] as Set) && entry.axes.x.keySet() == CAL.request_shape._calibration.pixel_size.axes.x.keySet(), CAL.request_shape)
 
         // ---- the catalog and the unit rules at the conversion level (the same function the files and servers go through)
         expect("unit_catalog_is_loaded_from_the_conformance_file_not_from_this_script", LcUnits.conformance().is(null) == false && LcUnits.calibrationData().length_units.keySet() == CAL.length_units.keySet(), "")

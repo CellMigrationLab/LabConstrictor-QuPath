@@ -1,6 +1,6 @@
 """Writes the images of the calibration tests (tests/gui_test_calibration_body.groovy) from a JSON list: python tests/calibration_fixtures.py spec.json
 Each entry: {"file": path, "kind": "ome" | "imagej" | "tags" | "plain", ...}. `ome`: sx, ux, sy, uy (PhysicalSize and its unit text, kept exactly);
-`imagej`: unit, resolution; `tags`: resolution (pixels per resolution unit, x then y), resolutionunit (INCH, CENTIMETER, NONE); `plain`: nothing."""
+`imagej`: unit, resolution; `tags`: resolution (pixels per resolution unit, x then y), resolutionunit (INCH, CENTIMETER, NONE), optional bigtiff / byteorder; `plain`: nothing."""
 import json
 import sys
 
@@ -20,7 +20,8 @@ def main(spec_path: str) -> None:
         elif kind == "imagej":
             tifffile.imwrite(item["file"], image, imagej=True, resolution=tuple(item["resolution"]), metadata={"unit": item["unit"]})
         elif kind == "tags":
-            tifffile.imwrite(item["file"], image, resolution=tuple(item["resolution"]), resolutionunit=item["resolutionunit"])
+            extra = {k: item[k] for k in ("bigtiff", "byteorder") if k in item}  # BigTIFF and big-endian files: the header reader of the host must handle them
+            tifffile.imwrite(item["file"], image, resolution=tuple(item["resolution"]), resolutionunit=item["resolutionunit"], **extra)
         else:
             tifffile.imwrite(item["file"], image)
 
