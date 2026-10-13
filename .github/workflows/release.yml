@@ -1,0 +1,109 @@
+name: release
+# One-click install: when a release is published, this builds labconstrictor-qupath-<tag>.jar with build.sh (Java 25, against the pinned QuPath),
+# runs a smoke test on that exact jar in a real QuPath on a virtual screen (the menu entry exists, the dialog opens), and attaches the jar,
+# LabConstrictorTools-all.groovy and SHA256SUMS to the release; the QuPath version and the minimum Tools version are appended to the notes.
+# Manually (workflow_dispatch, input "tag") it is a dry run: build, smoke test, files kept as workflow artifacts, nothing is published.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name to build for (dry run: nothing is published)"
+        required: true
+        default: "v0.0.0-dryrun"
+permissions:
+  contents: read
+env:
+  # QuPath is pinned by version and checksum (same pin as qupath-gui.yml); the download is cached per QUPATH_VERSION.
+  QUPATH_VERSION: "0.7.0"
+  QUPATH_SHA256: 165e27a0731d58ba039e9d0d34a54acf896bb92e81922370df295cb85418ce53
+  TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check the tag name
+        run: |
+          # the tag becomes a file name and the jar's version: letters, digits, dot, dash, underscore only
+          [[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo "::error::unsafe or empty tag name"; exit 1; }
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1  (QuPath 0.7 is built with Java 25)
+        with: { distribution: temurin, java-version: "25" }
+      - name: Install xvfb and the libraries QuPath's JavaFX needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth libgtk-3-0t64 libxtst6 libxrender1 libxi6 libxrandr2 libgl1 libasound2t64 fonts-dejavu-core
+      - name: Cache QuPath
+        id: qupath-cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: qupath-dist
+          key: qupath-${{ env.QUPATH_VERSION }}-${{ env.QUPATH_SHA256 }}
+      - name: Download and check QuPath
+        if: steps.qupath-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL --retry 5 --retry-delay 10 -o qupath.tar.xz "https://github.com/qupath/qupath/releases/download/v${QUPATH_VERSION}/QuPath-v${QUPATH_VERSION}-Linux.tar.xz"
+          echo "$QUPATH_SHA256  qupath.tar.xz" | sha256sum -c -
+          mkdir qupath-dist
+          tar -xJf qupath.tar.xz -C qupath-dist
+          rm qupath.tar.xz
+      - name: Build the jar and the single-file script
+        run: |
+          test -d "$PWD/qupath-dist/QuPath/lib/app"
+          QUPATH="$PWD/qupath-dist/QuPath" LC_QUPATH_VERSION="$TAG" ./build.sh
+          test -f "target/labconstrictor-qupath-$TAG.jar"
+          test -s target/LabConstrictorTools-all.groovy
+      - name: Check the version inside the jar
+        run: |
+          unzip -p "target/labconstrictor-qupath-$TAG.jar" META-INF/MANIFEST.MF | tr -d '\r' | grep -Fx "Implementation-Version: $TAG"
+      - name: Smoke test the jar (QuPath on a virtual screen)
+        run: QUPATH="$PWD/qupath-dist/QuPath" tests/smoke_jar.sh "target/labconstrictor-qupath-$TAG.jar"
+      - name: Collect the release files and the notes
+        run: |
+          MIN_TOOLS=$(sed -n 's/.*MIN_TOOLS_VERSION = "\([^"]*\)".*/\1/p' src/main/resources/org/cellmigrationlab/labconstrictor/qupath/LcCompat.groovy)
+          [ -n "$MIN_TOOLS" ] || { echo "::error::MIN_TOOLS_VERSION not found in LcCompat.groovy"; exit 1; }
+          mkdir release-files
+          cp "target/labconstrictor-qupath-$TAG.jar" target/LabConstrictorTools-all.groovy release-files/
+          (cd release-files && sha256sum "labconstrictor-qupath-$TAG.jar" LabConstrictorTools-all.groovy > SHA256SUMS && cat SHA256SUMS)
+          {
+            echo "<!-- labconstrictor-qupath-build -->"
+            echo "### Install"
+            echo "Download \`labconstrictor-qupath-$TAG.jar\`, drag it onto the QuPath window (or copy it into the extensions folder shown in QuPath's Preferences) and restart QuPath. Then use **Extensions > LabConstrictor tools...**. \`LabConstrictorTools-all.groovy\` is the same script as one file for QuPath's Script Editor. \`SHA256SUMS\` lists the checksums."
+            echo
+            echo "- Built against **QuPath $QUPATH_VERSION** (Java 25). Tested: QuPath $QUPATH_VERSION on Linux; not tested on Windows or macOS."
+            echo "- Needs **labconstrictor-tools $MIN_TOOLS or newer** in the LabConstrictor app's environment."
+          } > release-files/release-notes-addition.md
+          cat release-files/release-notes-addition.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-files
+          path: release-files
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    # Only for a published release; a manual run is a dry run and stops after the build job.
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-files
+          path: release-files
+      - name: Attach the files and append the notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd release-files
+          gh release upload "$TAG" "labconstrictor-qupath-$TAG.jar" LabConstrictorTools-all.groovy SHA256SUMS --clobber
+          gh release view "$TAG" --json body --jq .body > body.md
+          if ! grep -q 'labconstrictor-qupath-build' body.md; then
+            { cat body.md; echo; echo; cat release-notes-addition.md; } > notes.md
+            gh release edit "$TAG" --notes-file notes.md
+          fi
