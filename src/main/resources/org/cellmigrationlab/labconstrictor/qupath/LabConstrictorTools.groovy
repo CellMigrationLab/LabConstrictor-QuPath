@@ -79,7 +79,8 @@ class LcConst {
     static final String FILE_INPUT_NOTE = "file input: results are in the file's pixel frame"      // conformance.json messages.file_input_note (SPEC 1.3)
     static final String SIZE_MISMATCH_TEMPLATE = "'{name}' is {w} x {h} but '{source}' was exported as {w2} x {h2}; shown at the pixel origin, not aligned"      // messages.size_mismatch (SPEC 1.1.7)
     static final List<Long> NATIVE_CRASH_CODES = [-11L, 139L, 3221225477L, -1073741819L]   // segmentation fault (Linux, macOS) and the Windows access violation, unsigned (Python) and signed (Java)
-    static final int EXIT_TOOL_IMPORT_FAILED = 3         // the worker's exit code when the app's tool module cannot be imported
+    static final int EXIT_TOOL_IMPORT_FAILED = 3         // the worker's exit code when the app's tool module cannot be imported ...
+    static final String IMPORT_FAILED_MARKER = "cannot import tool module"      // ... and what the worker prints last on stderr then (log.IMPORT_FAILED_MARKER): code 3 alone is not proof, the Windows C runtime also ends a process with 3
     static final List<Integer> NON_PRINTABLE_TYPES = [Character.CONTROL, Character.FORMAT, Character.SURROGATE, Character.PRIVATE_USE, Character.UNASSIGNED,
                                                       Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR, Character.SPACE_SEPARATOR].collect { it as int }   // Unicode categories Python's str.isprintable() rejects
     static final int RESULTS_DIR_ATTEMPTS = 20           // tries to find an unused results folder name before giving up (cli.RESULTS_DIR_ATTEMPTS)
@@ -891,7 +892,7 @@ class LcWorker {
         if (text.contains("ModuleNotFoundError") || text.contains("ImportError")) return "a Python package is missing or broken in the app's environment (see the traceback above)"
         if (code in [-9, 137]) return "the worker was killed (out of memory? the OS OOM killer ends big image jobs this way)"
         if ((code as Long) in LcConst.NATIVE_CRASH_CODES) return "the worker crashed natively (segmentation fault in a compiled library)"
-        return code == LcConst.EXIT_TOOL_IMPORT_FAILED ? "the app's tool module failed to import (see the traceback above)" : "the worker process stopped unexpectedly"
+        return (code == LcConst.EXIT_TOOL_IMPORT_FAILED && text.contains(LcConst.IMPORT_FAILED_MARKER)) ? "the app's tool module failed to import (see the traceback above)" : "the worker process stopped unexpectedly"
     }
 
     /** What to tell the person when the worker ends without answering: the likely cause (hintForExit), the exit code, then the worker's own last words. */
@@ -971,29 +972,6 @@ class LcWorker {
         try { proc.outputStream.close() } catch (IOException e) { LcLog.warn("could not close the worker's input (it is killed if it does not stop)", e) }
         if (!proc.waitFor(LcConst.CLOSE_WAIT_SECONDS, TimeUnit.SECONDS)) kill()
     }
-}
-
-// ---------------------------------------------------------------------------------------------------- whole-number box
-/** The value factory of an integer box. JavaFX's own IntegerSpinnerValueFactory stops at 2^31 - 1; this one holds any whole number between `min` and `max`
- *  (up to +-LcConst.FORM_INTEGER_LIMIT). A typed number outside the range is put at the nearest limit (a GUI holds the value inside the range); text that is not a whole number
- *  is a NumberFormatException, which LcDialog.commitSpinner reports. */
-class LcLongValueFactory extends SpinnerValueFactory<Long> {
-    final long min
-    final long max
-
-    LcLongValueFactory(long min, long max, long initial) {
-        this.min = min
-        this.max = max
-        setConverter(new javafx.util.StringConverter<Long>() {
-            String toString(Long value) { return value == null ? "" : value.toString() }
-            Long fromString(String text) { return Math.max(min, Math.min(max, Long.parseLong(text.trim()))) }
-        })
-        setValue(Math.max(min, Math.min(max, initial)))
-    }
-
-    void decrement(int steps) { setValue(Math.max(min, getValue() - steps)) }      // getValue(): inside this class `value` is the factory's private field, not the number
-
-    void increment(int steps) { setValue(Math.min(max, getValue() + steps)) }
 }
 
 // ---------------------------------------------------------------------------------------------------- the dialog (the form, the request, running, results, copy as command)
@@ -1481,33 +1459,53 @@ class LcDialog {
         return new HBox(12, *buttons, box)
     }
 
-    /** A spinner (optionally with a slider) of whole numbers; with no declared limits it accepts +-LcConst.FORM_INTEGER_LIMIT, and a declared bound beyond that is cut to it. */
+    /** A spinner (optionally with a slider) of whole numbers; with no declared limits it accepts +-LcConst.FORM_INTEGER_LIMIT, and a declared bound beyond that is cut to it.
+     *  The text in the box is the value (LcNumbers): a number beyond a limit or text that is not a whole number is refused (LcNumberError), never put at the nearest limit. */
     Map integerControl(Map p) {
         long lo = p.minimum != null ? Math.max((p.minimum as Number).longValue(), -LcConst.FORM_INTEGER_LIMIT) : -LcConst.FORM_INTEGER_LIMIT      // Number.longValue() saturates, so a huge bound is cut, never wrapped
         long hi = p.maximum != null ? Math.min((p.maximum as Number).longValue(), LcConst.FORM_INTEGER_LIMIT) : LcConst.FORM_INTEGER_LIMIT
         long initial = p.default != null ? (p.default as Number).longValue() : Math.max(lo, Math.min(hi, 0L))
-        def spinner = new Spinner<Long>(new LcLongValueFactory(lo, hi, initial))
+        String label = p.label as String
+        LcIntegerFactory factory = new LcIntegerFactory(label, lo, hi, initial)
+        def spinner = new Spinner<Long>(factory)
         spinner.editable = true
-        commitOnFocusLost(spinner, p.label as String)
+        followValue(spinner)
+        commitOnFocusLost(spinner, label)
         controls[p.name] = spinner
         Node node = spinner
         if (wantsSlider(p)) node = sliderBeside(spinner, lo, hi, initial) { double b -> spinner.valueFactory.value = Math.round(b) }
-        return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = (it as Number).longValue() }]
+        return [node: node, get: { LcNumbers.integer(label, spinner.editor.text, lo, hi) }, set: { setNumber(spinner, (it as Number).longValue()) }]
     }
 
-    /** A spinner (optionally with a slider); with no declared limits it accepts +-LcConst.FLOAT_LIMIT. The step is 1% of a range of 100 or less, else 1. */
+    /** A spinner (optionally with a slider) of decimal numbers; with no declared limits it accepts +-LcConst.FLOAT_LIMIT. The step is 1% of a range of 100 or less, else 1. Same rules as
+     *  integerControl: the text is the value, and a number beyond a limit is refused, never clamped. */
     Map floatControl(Map p) {
-        def lo = p.minimum != null ? p.minimum as double : -LcConst.FLOAT_LIMIT
-        def hi = p.maximum != null ? p.maximum as double : LcConst.FLOAT_LIMIT
-        def initial = p.default != null ? p.default as double : Math.max(lo, Math.min(hi, 0d))
-        def step = (hi - lo) <= 100 && p.maximum != null ? (hi - lo) / 100 : 1d
-        def spinner = new Spinner<Double>(lo, hi, initial, step)
+        Number lo = p.minimum != null ? p.minimum as Number : -LcConst.FLOAT_LIMIT
+        Number hi = p.maximum != null ? p.maximum as Number : LcConst.FLOAT_LIMIT
+        double initial = p.default != null ? p.default as double : Math.max(lo.doubleValue(), Math.min(hi.doubleValue(), 0d))
+        double step = (hi.doubleValue() - lo.doubleValue()) <= 100 && p.maximum != null ? (hi.doubleValue() - lo.doubleValue()) / 100 : 1d
+        String label = p.label as String
+        LcDoubleFactory factory = new LcDoubleFactory(label, lo, hi, initial, step)
+        def spinner = new Spinner<Double>(factory)
         spinner.editable = true
-        commitOnFocusLost(spinner, p.label as String)
+        followValue(spinner)
+        commitOnFocusLost(spinner, label)
         controls[p.name] = spinner
         Node node = spinner
-        if (wantsSlider(p)) node = sliderBeside(spinner, lo, hi, initial) { double b -> spinner.valueFactory.value = b }
-        return [node: node, get: { spinner.value }, set: { spinner.valueFactory.value = it as double }]
+        if (wantsSlider(p)) node = sliderBeside(spinner, lo.doubleValue(), hi.doubleValue(), initial) { double b -> spinner.valueFactory.value = b }
+        return [node: node, get: { LcNumbers.decimal(label, spinner.editor.text, lo, hi) }, set: { setNumber(spinner, it as double) }]
+    }
+
+    /** Puts a value into the box: the value AND its text (a value equal to the old one fires no change, and the text must not keep what was typed before). */
+    static void setNumber(Spinner spinner, Object value) {
+        spinner.valueFactory.value = value
+        spinner.editor.text = spinner.valueFactory.converter.toString(value)
+    }
+
+    /** The box shows the text of its value whenever the value changes (the spinner's skin does this too, but a box that has no skin yet must hold its text as well: the text is what a run reads). */
+    static void followValue(Spinner spinner) {
+        spinner.editor.text = spinner.valueFactory.converter.toString(spinner.valueFactory.value)
+        spinner.valueFactory.valueProperty().addListener({ o, a, b -> spinner.editor.text = spinner.valueFactory.converter.toString(b) } as javafx.beans.value.ChangeListener)
     }
 
     /** A slider is only offered when asked for, the parameter is not optional and both limits are known. */
@@ -1677,19 +1675,23 @@ class LcDialog {
         return [node: node, get: { field.text }, set: { field.text = it as String }]
     }
 
-    /** A spinner only takes typed text on Enter; this also takes it when the box loses focus. */
+    /** A spinner only takes typed text on Enter; this also takes it when the box loses focus. Enter is handled here too, so that text the box refuses is said in the status line (commitSpinner) instead of
+     *  raising the converter's error inside JavaFX's own key handler. */
     void commitOnFocusLost(Spinner spinner, String label = null) {
         spinner.focusedProperty().addListener({ o, a, focused -> if (!focused) commitSpinner(spinner, label) } as javafx.beans.value.ChangeListener)
+        spinner.editor.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, { javafx.scene.input.KeyEvent e ->
+            if (e.code == javafx.scene.input.KeyCode.ENTER) { commitSpinner(spinner, label); e.consume() }
+        } as javafx.event.EventHandler)
     }
 
-    /** Takes what was typed into the box; text that is not a number keeps the old value, and the person is told. */
+    /** Takes what was typed into the box (focus lost, Enter). Text the box refuses (not a number, beyond a limit) is said at once in the status line and stays in the box, and it is refused
+     *  again when Run is pressed: the value is never changed to fit. */
     void commitSpinner(Spinner spinner, String label = null) {
         try {
             spinner.increment(0)
-        } catch (RuntimeException e) {      // JavaFX reports unparseable text as NumberFormatException or as a RuntimeException around a ParseException
-            if (!(e instanceof NumberFormatException) && !(e.cause instanceof java.text.ParseException)) throw e
-            LcLog.warn("'" + (label ?: "number") + "': '" + spinner.editor?.text + "' is not a number (kept " + spinner.value + ")", e)
-            status?.text = "Check '" + (label ?: "number") + "': '" + spinner.editor?.text + "' is not a number; " + spinner.value + " is used."
+        } catch (LcNumberError e) {
+            LcLog.warn(e.message + " (the box keeps what was typed; the run is refused until it is changed)", e)
+            status?.text = e.message
         }
     }
 
@@ -1719,7 +1721,11 @@ class LcDialog {
     void hookEnabled(Map p) {
         def cond = p.enabled_when
         if (controls[cond.param] == null || controls[p.name] == null) return
-        def update = { wrappers[p.name].disable = !ruleSatisfied(cond, getters[cond.param]()) }
+        def update = {
+            def driver = null
+            try { driver = getters[cond.param]() } catch (LcNumberError e) { LcLog.once("enabled-driver:" + cond.param, "'" + cond.param + "' holds text the box refuses (" + e.message + "): '" + p.name + "' is greyed out until it is fixed") }
+            wrappers[p.name].disable = !ruleSatisfied(cond, driver)
+        }
         onChange(cond.param as String, update)
         update()
     }
@@ -1980,7 +1986,9 @@ class LcDialog {
         def values = new LinkedHashMap()
         for (p in currentTool.inputs) {
             def v
-            try { v = getters[p.name]() } catch (Exception e) { LcLog.warn("could not read '" + p.name + "'", e); status.text = "Check '" + p.label + "': " + e.message; return null }
+            try { v = getters[p.name]() }
+            catch (LcNumberError e) { LcLog.warn("run refused: " + e.message); status.text = e.message; return null }      // a typed number the box refuses (SPEC 6.2): the sentence alone, nothing is sent
+            catch (Exception e) { LcLog.warn("could not read '" + p.name + "'", e); status.text = "Check '" + p.label + "': " + e.message; return null }
             if (p.pixel_size_of && links[p.name] != null) {      // a linked pixel size (SPEC 2.3): the state decides; the declared default is never a stand-in
                 def link = links[p.name]
                 if (link.invalid != null) { status.text = "'" + p.label + "': '" + link.invalid + "' is not a number"; return null }

@@ -183,7 +183,13 @@ Thread.start("lc-gui-test") {
         expect("hint_killed", [-9, 137].every { LcWorker.hintForExit(it, "") == "the worker was killed (out of memory? the OS OOM killer ends big image jobs this way)" })
         expect("hint_native_crash_in_all_four_forms", [-11, 139, -1073741819].every { LcWorker.hintForExit(it, "") == "the worker crashed natively (segmentation fault in a compiled library)" } && LcWorker.hintForExit(null, "") != null)
         expect("hint_unsigned_windows_access_violation", (3221225477L as Long) in LcConst.NATIVE_CRASH_CODES)
-        expect("hint_tool_import_failed", LcWorker.hintForExit(3, "") == "the app's tool module failed to import (see the traceback above)")
+        // exit code 3 is an import failure only with the marker the worker prints last (Tools PR #124; the Windows C runtime also ends a process with 3 for abort() and a raised SIGSEGV)
+        def IMPORT = "the app's tool module failed to import (see the traceback above)"
+        expect("hint_tool_import_failed_needs_the_marker", LcWorker.hintForExit(3, "LabConstrictor worker: cannot import tool module 'x' (details above)") == IMPORT && LcWorker.hintForExit(3, "") != IMPORT && LcWorker.hintForExit(3, "boom") == "the worker process stopped unexpectedly")
+        expect("hint_code_3_without_the_marker_is_the_plain_sentence", LcWorker.hintForExit(3, "") == "the worker process stopped unexpectedly" && LcWorker.hintForExit(3, null) == "the worker process stopped unexpectedly" && LcWorker.hintForExit(3, "abort() has been called") == "the worker process stopped unexpectedly")
+        expect("hint_the_marker_with_another_code_is_not_an_import_failure", LcWorker.hintForExit(1, "cannot import tool module 'x'") == "the worker process stopped unexpectedly" && LcWorker.hintForExit(null, "cannot import tool module 'x'") == "the worker process stopped unexpectedly")
+        expect("hint_a_missing_package_still_wins_over_code_3_and_the_marker", LcWorker.hintForExit(3, "ModuleNotFoundError: No module named 'x'\ncannot import tool module 'x'").startsWith("a Python package is missing"))
+        expect("hint_the_marker_is_the_tools_marker", LcConst.IMPORT_FAILED_MARKER == "cannot import tool module" && LcConst.EXIT_TOOL_IMPORT_FAILED == 3)
         expect("hint_unknown_cause_is_a_plain_sentence", LcWorker.hintForExit(1, "boom") == "the worker process stopped unexpectedly")
         def fake = { String name, String stderr, int code ->
             def f = new File(WP + "/" + name); f.text = "#!/bin/sh\necho \"" + stderr + "\" >&2\nexit " + code + "\n"; f.setExecutable(true); f
@@ -193,8 +199,10 @@ Thread.start("lc-gui-test") {
         expect("live_crash_missing_package", c1.startsWith("a Python package is missing or broken in the app's environment (see the traceback above) (exit code 1). ") && c1.contains("No module named 'foo'"), c1)
         def c2 = crashOf(fake("fake_killed.sh", "", 137))
         expect("live_crash_killed", c2 == "the worker was killed (out of memory? the OS OOM killer ends big image jobs this way) (exit code 137)", c2)
-        def c3 = crashOf(fake("fake_import.sh", "tool module broke", 3))
-        expect("live_crash_import_failed_with_the_last_words", c3.startsWith("the app's tool module failed to import (see the traceback above) (exit code 3). tool module broke"), c3)
+        def c3 = crashOf(fake("fake_import.sh", "LabConstrictor worker: cannot import tool module broke (details above)", 3))
+        expect("live_crash_import_failed_with_the_last_words", c3.startsWith("the app's tool module failed to import (see the traceback above) (exit code 3). LabConstrictor worker: cannot import tool module broke"), c3)
+        def c3plain = crashOf(fake("fake_abort.sh", "abort() has been called", 3))
+        expect("live_crash_code_3_without_the_marker_is_not_called_an_import_failure", c3plain == "the worker process stopped unexpectedly (exit code 3). abort() has been called", c3plain)
 
     } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
     finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }

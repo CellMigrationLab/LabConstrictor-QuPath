@@ -165,16 +165,19 @@ Thread.start("lc-gui-test") {
         expect("an_integer_above_a_billion_is_accepted", fx { dlg.getters["free_int"]() } == 2000000000, fx { dlg.getters["free_int"]() })
         fx { dlg.setters["free_int"](LIMIT) }
         expect("the_largest_integer_is_held_exactly_and_sent_as_it_is", fx { dlg.getters["free_int"]() } == LIMIT && LcJson.toJson([free_int: fx { dlg.getters["free_int"]() }]) == '{"free_int":9007199254740991}', fx { dlg.getters["free_int"]() })
+        // a typed integer beyond the limit is REFUSED, never put at the limit (SPEC 6.2; it used to stop at 2^53 - 1): the status says it, the run reads the text and refuses it
+        def typedRefusal = { String n -> try { fx { dlg.getters[n]() }; null } catch (LcNumberError e) { e.message } }
         fx { spin("free_int").editor.text = "9007199254740993"; dlg.commitSpinner(spin("free_int"), "Free int") }
-        expect("a_typed_integer_beyond_the_limit_stops_at_it", fx { dlg.getters["free_int"]() } == LIMIT, fx { dlg.getters["free_int"]() })
-        fx { spin("free_int").editor.text = "9007199254740993"; spin("free_int").commitValue() }      // Enter in the box commits without the arrow code
-        expect("a_typed_integer_beyond_the_limit_stops_at_it_on_enter", fx { dlg.getters["free_int"]() } == LIMIT, fx { dlg.getters["free_int"]() })
+        expect("a_typed_integer_beyond_the_limit_is_refused_not_clamped", typedRefusal("free_int") == "'Free int' must be <= 9007199254740991" && status(dlg) == "'Free int' must be <= 9007199254740991" && spin("free_int").editor.text == "9007199254740993", [typedRefusal("free_int"), status(dlg)])
+        fx { dlg.status.text = "idle"; spin("free_int").editor.text = "9007199254740993"; javafx.event.Event.fireEvent(spin("free_int").editor, new javafx.scene.input.KeyEvent(javafx.scene.input.KeyEvent.KEY_PRESSED, "", "", javafx.scene.input.KeyCode.ENTER, false, false, false, false)) }      // Enter in the box: its own handler says it in the status
+        expect("a_typed_integer_beyond_the_limit_is_refused_on_enter_too", typedRefusal("free_int") == "'Free int' must be <= 9007199254740991" && status(dlg) == "'Free int' must be <= 9007199254740991", [typedRefusal("free_int"), status(dlg)])
+        fx { dlg.setters["free_int"](LIMIT) }
         fx { spin("free_int").increment(1) }
         expect("the_arrow_never_passes_the_limit", fx { dlg.getters["free_int"]() } == LIMIT, fx { dlg.getters["free_int"]() })
         fx { spin("free_int").editor.text = "-9007199254740991"; dlg.commitSpinner(spin("free_int"), "Free int"); spin("free_int").decrement(3) }
         expect("the_arrow_never_passes_the_lower_limit", fx { dlg.getters["free_int"]() } == -LIMIT, fx { dlg.getters["free_int"]() })
         fx { spin("free_int").editor.text = "12x"; dlg.commitSpinner(spin("free_int"), "Free int") }
-        expect("a_typed_non_integer_is_said_and_the_value_kept", status(dlg).contains("not a number") && fx { dlg.getters["free_int"]() } == -LIMIT, status(dlg))
+        expect("a_typed_non_integer_is_said_and_refused_and_the_value_kept", status(dlg).contains("not a number") && fx { spin("free_int").value } == -LIMIT && typedRefusal("free_int") == "'Free int': '12x' is not a number", status(dlg))
         fx { dlg.setters["free_int"](2000000000) }
         fx { dlg.setters["free_float"](5e14d) }
         expect("a_float_above_1e12_is_accepted", fx { dlg.getters["free_float"]() } == 5e14d, fx { dlg.getters["free_float"]() })
