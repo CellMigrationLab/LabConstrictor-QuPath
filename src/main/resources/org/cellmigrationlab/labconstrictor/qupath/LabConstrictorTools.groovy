@@ -5,7 +5,9 @@
  * tool's declared schema (see https://github.com/CellMigrationLab/LabConstrictor-Tools, docs/PROTOCOL.md); the tool runs in the app's
  * own Python environment through the LabConstrictor worker (JSON lines on stdin/stdout), so QuPath never imports the app's packages.
  *
- * Use it as the extension jar (Extensions > LabConstrictor tools...) or paste it in the Script Editor and run it.
+ * Use it as the extension jar (Extensions > LabConstrictor tools...). The script is several files, joined in the order of parts.txt (this file first; the others hold the
+ * compatibility check LcCompat, retention and run records LcRetention, run identity LcRunIdentity, and any file added after them): this file alone does not run, because the classes it
+ * uses are in the others. `./build.sh` also writes target/LabConstrictorTools-all.groovy, the whole script in one file, to paste in the Script Editor and run.
  *
  * Sections, in file order: logging (LcLog), JSON (LcJson), image area (LcArea), calibration (LcUnits, LcCal, LcTiff, LcLink), registry and trust checks (LcRegistry), the worker (LcWorker), the dialog (LcDialog:
  * form, copy as command, request, running, results) and the entry point.
@@ -828,39 +830,6 @@ class LcRegistry {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------- run records
-/** One folder per run under <LC_HOME>/runs with a run.json, in the format of labconstrictor_tools.runs (a host never deletes a record: retention belongs to the Tools reference code), so that
- *  `labconstrictor-tools support-bundle` finds QuPath runs. A record holds file paths and the values passed, never image or table contents. */
-class LcRuns {
-    static final Map<String, String> STATUS = [COMPLETION: "COMPLETE", FAILURE: "FAILED", CANCELATION: "CANCELED", CRASH: "CRASHED"]   // the worker's response types as the client names them
-
-    static File runsDir() { return new File(LcRegistry.home(), "runs") }
-
-    /** Writes the record of one finished run and returns its folder, or null (said in the log) when it cannot be written: a record never breaks a run.
-     *  `run` holds entry (the registry entry of the app), app, tool, inputs, outcome (the worker's last message), seconds and stderr (the worker's output). */
-    static File record(Map run) {
-        def (entry, app, toolId, inputs, outcome, seconds, stderr) = [run.entry, run.app as String, run.tool as String, run.inputs as Map, run.outcome as Map, run.seconds as double, run.stderr as String]
-        try {
-            def now = java.time.Instant.now()
-            def stamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmssSSSSSS").withZone(java.time.ZoneOffset.UTC).format(now)
-            def folder = new File(runsDir(), stamp + "_" + LcDialog.slug(app) + "_" + LcDialog.slug(toolId))
-            folder.mkdirs()
-            def outputs = outcome.outputs instanceof Map ? outcome.outputs : [:]
-            def content = [
-                app: app, app_version: entry.version, tool: toolId, host: "qupath", finished_utc: now.toString(), seconds: Math.round(seconds * 100) / 100d,
-                status: STATUS[outcome.responseType] ?: outcome.responseType, error: outcome.error, code: outcome.code, traceback: outcome.trace ?: outcome.traceback,
-                inputs: inputs.findAll { k, v -> k != "_job_dir" },      // the host-owned folder is not a user input
-                results: (outputs.results ?: []).collect { r -> r.findAll { k, v -> k != "matrix_yx" } },
-                timings: outputs.timings, interpreter: outputs.diagnostics, stderr_tail: (stderr ?: "").takeRight(LcConst.RUN_STDERR_CHARS)]
-            new File(folder, "run.json").setText(LcJson.pretty(content), "UTF-8")
-            return folder
-        } catch (IOException | RuntimeException e) {      // broad on purpose: whatever goes wrong here must not break the run, but its absence must be visible
-            LcLog.warn("could not write the run record for " + app + " " + toolId, e)
-            return null
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------------------------- the worker
 /** One Python worker process of an app: JSON lines on stdin/stdout, one reader thread per stream, one result queue per running task. */
 class LcWorker {
@@ -870,14 +839,13 @@ class LcWorker {
     volatile boolean closed = false
     Thread stderrReader                                 // reads the worker's error output; a crash text waits for it to finish so the worker's last words are not missed
     volatile boolean killedAfterCancel = false          // the person pressed Cancel and the tool did not stop: the worker was ended by the host, not by a fault
+    volatile boolean cancelRequested = false            // the person pressed Cancel during the run in progress (Tools Task.cancel_requested): a crash that follows is recorded as cancelled, not failed
     private int counter = 0
 
     LcWorker(Map entry) {
         def command = [entry.python as String, "-m", "labconstrictor_tools", "serve", "--module", entry.module as String]
         def pb = new ProcessBuilder(command)
-        LcRegistry.SCRUBBED_ENV.each { pb.environment().remove(it) }
-        def path = ((entry.pythonpath ?: []) + [entry.runtime_path ?: ""]).findAll { it }.join(File.pathSeparator)
-        pb.environment().putAll([PYTHONPATH: path, PYTHONNOUSERSITE: "1", PYTHONSAFEPATH: "1", PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1"])
+        LcPython.applyEnvironment(pb, entry)
         proc = pb.start()
         Thread.start("lc-stdout") {
             try {
@@ -940,6 +908,7 @@ class LcWorker {
     /** Sends one EXECUTE and blocks until its terminal message; `onUpdate` gets (message, current, maximum). */
     Map run(String toolId, Map inputs, Closure onUpdate) {
         def id = "lcq-" + (++counter) + "-" + System.nanoTime()
+        cancelRequested = false
         def queue = new LinkedBlockingQueue<Map>()
         tasks.put(id, queue)
         try {
@@ -961,9 +930,12 @@ class LcWorker {
     }
     volatile String currentTask = null      // id of the run in progress (cancel targets it)
 
-    /** The terminal message of a run; a worker that ended after Cancel was pressed is a cancellation (the person asked for it), never a crash text that reads like out-of-memory. */
+    /** The terminal message of a run; a worker that ended after Cancel was pressed is a cancellation (the person asked for it), never a crash text that reads like out-of-memory
+     *  (the crash text stays in `error`, for the run record). `cancelRequested` says whether Cancel was pressed before the end: the run record and the done markers read it. */
     private Map endOfRun(Map msg) {
-        return (msg.responseType == "CRASH" && killedAfterCancel) ? [responseType: "CANCELATION", workerStopped: true] : msg
+        Map end = (msg.responseType == "CRASH" && killedAfterCancel) ? [responseType: "CANCELATION", workerStopped: true, error: msg.error] : msg
+        end.cancelRequested = cancelRequested
+        return end
     }
 
     /** Writes one JSON line to the worker; synchronized so lines from the run and cancel threads never interleave. */
@@ -978,6 +950,7 @@ class LcWorker {
     void cancel(int graceSeconds = LcConst.CANCEL_GRACE_SECONDS) {
         def id = currentTask
         if (id == null) return
+        cancelRequested = true
         try { send([task: id, requestType: "CANCEL"]) } catch (IOException e) { LcLog.warn("could not send the cancel request (the worker is killed after " + graceSeconds + " s)", e) }
         Thread.start("lc-cancel") {
             Thread.sleep(graceSeconds * 1000L)
@@ -1072,6 +1045,8 @@ class LcDialog {
     Map<String, String> imageOf = [:]            // pixel-size parameter -> image parameter
     Map<String, LcLink> links = [:]              // pixel-size parameter -> the state of its field (unset / auto / user), a flag set by the person's edits (SPEC 2.2)
     volatile Map<String, Map> calibrationAtRun = [:]     // pixel-size parameter -> its `_calibration` entry, frozen when the request was read (SPEC 2.3.4)
+    volatile LcRun runSnapshot                           // the run in progress, or the last one: frozen when Run was pressed, before any worker call (SPEC 4.1); export, the record and the placement of results read it
+    Map<String, Closure> formSources = [:]               // the image choices of the form (the Map the image choosers share); kept in step with the image open in QuPath
     List imageDataListeners = []                 // listeners on QuPath's image property (removed when the window closes)
     boolean programmatic = false                 // true while the host writes a pixel-size field (such a write is never a person's edit)
     Map<String, TextField> fileFields = [:]      // image parameter -> the field for a file path
@@ -1100,7 +1075,7 @@ class LcDialog {
             status.text = "No LabConstrictor app is registered on this machine." + (problems ? " Skipped: " + problems.join("; ") : "")
         }
         stage.scene = new Scene(root)
-        stage.onHidden = { stopWorker(false); imageDataListeners.each { qupath?.imageDataProperty()?.removeListener(it as javafx.beans.value.ChangeListener) } }   // also when closed from code
+        stage.onHidden = { if (running) worker?.cancelRequested = true; stopWorker(false); imageDataListeners.each { qupath?.imageDataProperty()?.removeListener(it as javafx.beans.value.ChangeListener) } }   // also when closed from code
         stage.show()
         if (!apps.isEmpty()) appBox.value = apps.keySet().first()
     }
@@ -1132,6 +1107,9 @@ class LcDialog {
         messageLabel.managed = false
         choiceTimer.onFinished = { resolveChoices() }
         idleTimer.onFinished = { closeIdleWorker() }
+        def follow = { o, a, b -> LcRun.refreshChoosers(this) } as javafx.beans.value.ChangeListener      // the open image changed: "Current image: ..." must name the image that is open now
+        qupath?.imageDataProperty()?.addListener(follow)
+        imageDataListeners << follow
     }
 
     /** The scrolling area that holds the generated form. */
@@ -1344,6 +1322,7 @@ class LcDialog {
     /** Rows for the normal parameters, one collapsed section per Collapsed group, one for Advanced; then the links between parameters. */
     void buildForm(List inputs) {
         def sources = imageSources()
+        formSources = sources
         def ordered = presentationOrder(inputs)
         def shown = ordered.findAll { !it.advanced }, advanced = ordered.findAll { it.advanced }
         addSections(shown, sources)
@@ -2039,8 +2018,27 @@ class LcDialog {
         def values = readFormValues()
         if (values == null) return
         imageChoiceAtRun = imageBoxes.collectEntries { k, b -> [(k): b.value as String] }
+        def app = apps[appBox.value]
+        Map<String, String> compat = LcCompat.checkApp(app)
+        if (compat.status == LcCompat.REFUSE) { LcLog.warn("run of '" + currentTool.id + "' refused: " + compat.reason); status.text = compat.reason; return }
         showRunning()
+        try {
+            freeze(values)
+        } catch (LcRefusal e) {
+            LcLog.warn("run of '" + currentTool.id + "' refused" + (e.code ? " [" + e.code + "]" : "") + ": " + e.message)
+            runSnapshot?.active = false
+            finish(appBox.value as String, currentTool.label as String, [responseType: "FAILURE", error: e.message, code: LcConst.REFUSAL_CODE, reason: e.code], 0d)
+            return
+        }
         runInBackground(values)
+    }
+
+    /** Freezes the run (SPEC 4.1) on the FX thread: the image each input comes from (as objects), the selected regions, the plane and the Image areas, all as they are NOW. A refusal
+     *  (an area outside the image, no selection, a chooser that names another image than the open one) is thrown before anything starts. */
+    void freeze(Map values) {
+        planeAtRun = viewerPlane()
+        runSnapshot = LcRun.take(this, values)
+        areasAtRun = resolveAreas(values, currentTool.inputs)
     }
 
     /** The form goes busy: Run off, Cancel on, an indeterminate progress bar. */
@@ -2075,11 +2073,12 @@ class LcDialog {
 
     /** Copies what the thread needs (the form may change meanwhile), runs on a thread, shows the outcome on the FX thread. */
     void runInBackground(Map values) {
-        def toolId = currentTool.id as String
-        def app = apps[appBox.value]
-        def appName = appBox.value
-        def toolLabel = currentTool.label
-        def toolInputs = currentTool.inputs
+        LcRun run = runSnapshot
+        def toolId = run.toolId
+        def app = run.app
+        def appName = run.appName
+        def toolLabel = run.toolLabel
+        def toolInputs = run.tool.inputs
         Thread.start("lc-run") {
             def t0 = System.nanoTime()
             Map outcome = runOnWorker(app, appName, toolId, toolInputs, values)
@@ -2092,10 +2091,12 @@ class LcDialog {
     Map runOnWorker(Map app, String appName, String toolId, List toolInputs, Map values) {
         Map outcome
         Map inputs = null
+        File recordDir = null
         def t0 = System.nanoTime()
         def tmp = Files.createTempDirectory("lcqupath_").toFile()
         try {
             inputs = prepareInputs(values, toolInputs, tmp, appName, toolId)
+            recordDir = LcRuns.begin(appName, toolId)      // the record folder exists from the start of the run, owner marker first (SPEC 3.2)
             ensureWorker(app, appName)
             outcome = worker.run(toolId, inputs) { message, current, maximum ->
                 Platform.runLater {
@@ -2113,7 +2114,13 @@ class LcDialog {
         } finally {
             LcLog.deleteTemp(tmp)
         }
-        if (inputs != null && outcome.code != LcConst.REFUSAL_CODE) LcRuns.record([entry: app.entry, app: appName, tool: toolId, inputs: inputs, outcome: outcome, seconds: (System.nanoTime() - t0) / 1e9, stderr: worker?.stderrText()])      // a refusal never reached the worker: no record
+        if (inputs != null && outcome.code != LcConst.REFUSAL_CODE) {      // a refusal never reached the worker: no record
+            LcRun run = runSnapshot
+            Map<String, String> ended = LcRuns.finish(recordDir, new File(inputs["_job_dir"] as String), [entry: app.entry, app: appName, tool: toolId, inputs: inputs, outcome: outcome, seconds: (System.nanoTime() - t0) / 1e9,
+                                                                                                          stderr: worker?.stderrText(), runId: run?.runId, startedUtc: run?.startedUtc])
+            if (ended.problem) outcome.recordProblem = ended.problem
+            else LcRetention.startPrune(app.entry as Map)      // after the done markers: the Tools CLI removes what is past the quota, this script never does (SPEC 3.1)
+        }
         return outcome
     }
 
@@ -2123,10 +2130,10 @@ class LcDialog {
     File selectionMask(Map p, File tmp, String appName) {
         def label = p.label as String
         def chosen = imageChoiceAtRun[p.region_of]
-        def data = qupath?.imageData
+        def data = LcRun.dataFor(this, p.region_of as String)
         if (data == null || chosen == null || !chosen.startsWith("Current image"))
             throw new LcRefusal("'" + label + "': the selection belongs to the image open in QuPath: choose 'Current image' for the image, or untick the selection")
-        def selected = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }
+        def selected = LcRun.roisOf(this, data).collect { [ROI: it] }      // the regions frozen when Run was pressed
         if (!selected) throw new LcRefusal("'" + label + "': no annotation is selected: select one or more annotations, or untick the selection")
         LcArea.checkSelectionPlane(label, selected*.ROI, planeAtRun.z, planeAtRun.t)       // the mask is for the plane that is exported (QuPath #21)
         if (selected.size() > LcConst.MAX_REGION_OBJECTS) throw new LcRefusal("'" + label + "': " + selected.size() + " annotations are selected; at most " + LcConst.MAX_REGION_OBJECTS + " are supported")
@@ -2163,13 +2170,20 @@ class LcDialog {
     /** The request inputs: every form value prepared, plus the host-owned results folder as `_job_dir`. */
     Map prepareInputs(Map values, List params, File tmp, String appName, String toolId) {
         def inputs = new LinkedHashMap()
-        planeAtRun = viewerPlane()                      // one plane for the whole run, read once (what is exported, masked and drawn on is the same plane)
+        LcRun run = runSnapshot
+        LcRun.reach("prepare")
+        boolean frozen = run != null && run.active      // a run started by Run: the plane, the areas, the images and the selection were frozen when it was pressed (SPEC 4.1)
+        if (!frozen) {                                   // a direct call (no run in progress): one plane for the whole call, read once; before anything is exported, so a refused area costs nothing
+            planeAtRun = viewerPlane()
+            areasAtRun = resolveAreas(values, params)
+        }
         framesAtRun = [:]
-        areasAtRun = resolveAreas(values, params)       // before anything is exported: a refused area costs nothing
+        LcRun.reach("export")
         values.each { name, v -> inputs[name] = prepareInput(params.find { it.name == name }, name as String, v, tmp, appName) }
         def calibration = calibrationAtRun.findAll { name, entry -> values[name] != null }
         if (calibration) inputs["_calibration"] = calibration      // the reserved per-axis input (SPEC 2.3.4): tools never see it, the run record keeps it
         inputs["_job_dir"] = newJobDir(appName, toolId).absolutePath
+        if (frozen) run.resultsPath = inputs["_job_dir"]
         return inputs
     }
 
@@ -2237,19 +2251,18 @@ class LcDialog {
 
     Map resolveAreaOnFx(Map p, String kind, def server) {
         def label = p.label as String
-        def data = qupath?.imageData
+        def data = LcRun.dataFor(this, p.name as String)
         if (data == null) throw new LcRefusal("'" + label + "': no image is open in QuPath for the Image area '" + kind + "': open the image, or choose '" + LcArea.WHOLE + "'")
         def viewer = qupath.viewer
         int z = planeAtRun.z, t = planeAtRun.t       // the plane the person was looking at when the run started
-        def area = kind == LcArea.SELECTION ? selectionArea(label, data, server, z, t) : kind == LcArea.VIEWPORT ? viewportArea(label, viewer, server, z, t) : null
+        def area = kind == LcArea.SELECTION ? selectionArea(label, LcRun.roisOf(this, data), server, z, t) : kind == LcArea.VIEWPORT ? viewportArea(label, viewer, server, z, t) : null
         if (area == null && kind != LcArea.SELECTION && kind != LcArea.VIEWPORT) throw new LcRefusal("'" + label + "': unknown Image area '" + kind + "'")
         if (area == null) throw new LcRefusal("'" + label + "': the " + kind + " lies outside the image: choose another area, or '" + LcArea.WHOLE + "'")
         return area
     }
 
     /** The bounding box of the selected annotations (points do not count), clamped to the image. */
-    static Map selectionArea(String label, def data, def server, int z, int t) {
-        def rois = data.hierarchy.selectionModel.selectedObjects.findAll { it.isAnnotation() && it.ROI != null && !it.ROI.isPoint() }*.ROI
+    static Map selectionArea(String label, List rois, def server, int z, int t) {
         if (!rois) throw new LcRefusal("'" + label + "': no annotation is selected for the Image area '" + LcArea.SELECTION + "': select one or more annotations, or choose '" + LcArea.WHOLE + "'")
         LcArea.checkSelectionPlane(label, rois, z, t)       // one plane, the exported one (QuPath #21)
         def box = [rois*.boundsX.min(), rois*.boundsY.min(), rois.collect { it.boundsX + it.boundsWidth }.max(), rois.collect { it.boundsY + it.boundsHeight }.max()]
@@ -2343,7 +2356,8 @@ class LcDialog {
         return f
     }
 
-    /** Results go to a new folder under <LC_HOME>/results, where the command line also puts its runs. The host never deletes a results folder: retention belongs to the Tools reference code. */
+    /** Results go to a new folder under <LC_HOME>/results, where the command line also puts its runs, with its owner marker written first (SPEC 3.2; the done marker comes when the run ends).
+     *  The host never deletes a results folder: `labconstrictor-tools prune` does, started after the run (LcRetention). */
     static File newJobDir(String appName, String toolId) {
         def root = new File(LcRegistry.home(), "results")
         root.mkdirs()
@@ -2356,6 +2370,8 @@ class LcDialog {
             if (candidate.mkdir()) job = candidate          // a name that exists is never reused
         }
         if (job == null) throw new LcRefusal("could not create a results folder in " + root)
+        try { LcRetention.writeOwner(job, "result") }
+        catch (IOException e) { throw new LcRefusal("could not mark the results folder " + job + " as this run's (" + e.message + "); nothing was started") }      // an unmarked folder could never be cleaned up: refuse instead
         return job
     }
 
@@ -2384,6 +2400,8 @@ class LcDialog {
         } else {
             finishFailed(toolLabel, outcome)
         }
+        if (outcome.recordProblem) status.text = status.text + "  (" + outcome.recordProblem + ")"      // a record that could not be written is said, never dropped
+        runSnapshot?.active = false
         if (!keepWorker.selected) stopWorker(false)
         else if (worker != null) { idleTimer.duration = Duration.seconds(idleSeconds); idleTimer.playFromStart() }      // the clock of an unused worker starts when its run ends
     }
@@ -2401,9 +2419,11 @@ class LcDialog {
         def summary = results.findAll { it.type == "values" }.collect { r -> r.values.collect { k, v -> k + "=" + show(v) }.join(", ") }.join("; ")
         status.text = "done in " + String.format("%.1f", seconds) + "s  " + summary
         resultNotes = []
+        targetNote = ""
         showResults(appName, toolLabel, results)
         if (resultNotes) status.text = status.text + "  " + resultNotes.unique().join(" ")      // what the person must know about where the results are (size mismatch, SPEC 1.1.7)
-        clearAfterRun()
+        if (targetNote) status.text = targetNote          // the results could not be drawn on their image (SPEC 4.4): the sentence says which run, which image and where the files are
+        if (LcRun.formShowsToolOf(this)) clearAfterRun()              // another tool or app is shown now: its fields are not this run's to clear
         scheduleChoices(LcConst.CHOICES_AFTER_RUN_MS)          // a run may change what a source tool answers (e.g. a game was prepared)
     }
 
@@ -2511,13 +2531,13 @@ class LcDialog {
     /** SPEC 1.1.7: an image or labels result that says ApplyTo and has another Y/X size than the part of its source the tool received is never aligned (QuPath opens a
      *  result as an image of its own at the pixel origin); the sentence is conformance `size_mismatch`. Empty when the sizes agree or one of them is unknown. */
     String sizeMismatch(Map r) {
-        def declared = r.apply_to ?: currentTool?.outputs?.find { it.name == r.name }?.display?.apply_to      // only a result that says ApplyTo (the first image input is not assumed)
+        def declared = r.apply_to ?: LcRun.toolOf(this)?.outputs?.find { it.name == r.name }?.display?.apply_to      // only a result that says ApplyTo (the first image input is not assumed)
         def frame = declared ? framesAtRun[declared as String] : null
         if (frame == null) return ""
         try {
             def server = ImageServers.buildServer(r.path as String)
             if (server.width == frame.width && server.height == frame.height) return ""
-            def source = currentTool?.inputs?.find { it.name == declared }?.label ?: declared
+            def source = LcRun.toolOf(this)?.inputs?.find { it.name == declared }?.label ?: declared
             return LcConst.SIZE_MISMATCH_TEMPLATE.replace("{name}", (r.name ?: r.type) as String).replace("{w}", server.width as String).replace("{h}", server.height as String)
                     .replace("{source}", source as String).replace("{w2}", frame.width as String).replace("{h2}", frame.height as String)
         } catch (Exception e) {      // broad on purpose (any reader can fail on any file): the preview reports an unreadable result; here the size check is just skipped
@@ -2537,9 +2557,10 @@ class LcDialog {
     /** Replace(): the next run's results take the place of the last ones in the same window. */
     void showResultWindow(VBox box, String appName, String toolLabel) {
         def key = appName + "/" + toolLabel
-        def replacing = currentTool?.outputs?.any { it.replace } && resultWindows[key]?.showing
+        def replacing = LcRun.toolOf(this)?.outputs?.any { it.replace } && resultWindows[key]?.showing
         def stage2 = replacing ? resultWindows[key] : new Stage()
         stage2.title = appName + ": " + toolLabel
+        stage2.userData = runSnapshot?.runId      // which run these results are of
         if (!replacing) stage2.initOwner(stage)
         def sc = new ScrollPane(box)
         sc.fitToWidth = true
@@ -2549,26 +2570,29 @@ class LcDialog {
         lastResultStage = stage2
     }
     Stage lastResultStage       // the window of the last results
+    String targetNote = ""      // the sentence of SPEC 4.4 when results of the last run were not drawn because their image is gone or changed (the status line shows it)
 
     // ---- placing results on the image (points, outlines)
     /** The input an output's results belong to: the one its ApplyTo names (the result's own `apply_to`, else the declaration in the schema), else the first image or labels input. */
     String applyToOf(Map r) {
-        return r.apply_to ?: currentTool?.outputs?.find { it.name == r.name }?.display?.apply_to ?: currentTool?.inputs?.find { it.type in ["image", "labels"] }?.name
+        return r.apply_to ?: LcRun.toolOf(this)?.outputs?.find { it.name == r.name }?.display?.apply_to ?: LcRun.toolOf(this)?.inputs?.find { it.type in ["image", "labels"] }?.name
     }
 
-    /** The image open in QuPath when an output's results were found in it (the image parameter was "Current image" for this run); otherwise null. */
-    def openImageFor(Map r) {
-        def data = qupath?.imageData
+    /** The image the results of output `r` are drawn on: the image the run was started on (frozen when Run was pressed, SPEC 4.2), and only while that very `ImageData` is still open
+     *  with the shape it was exported with (4.4). null when the input was not the image open in QuPath (a file or a project image), or when that image is gone or changed:
+     *  notPlacedSentence says which. Never the image that happens to be open when the run ends. */
+    qupath.lib.images.ImageData openImageFor(Map r) {
+        LcRun run = runSnapshot
         def target = applyToOf(r)
-        def chosen = target ? imageChoiceAtRun[target] : null
-        return (data == null || chosen == null || !chosen.startsWith("Current image")) ? null : data
+        LcSource source = (run != null && target != null) ? run.sources[target as String] : null
+        return (source == null || run.targetProblem(qupath, target as String) != null) ? null : source.imageData
     }
 
     /** The area the results of output `r` were found in: that of its apply_to image (a region parameter counts as the image it belongs to), else of the
      *  first image input; null when that input was sent whole (no offset). */
     Map areaFor(Map r) {
         def target = applyToOf(r)
-        def param = currentTool?.inputs?.find { it.name == target }
+        def param = LcRun.toolOf(this)?.inputs?.find { it.name == target }
         return areasAtRun[(param?.region_of ?: target) as String]
     }
 
@@ -2582,6 +2606,12 @@ class LcDialog {
      *  any other source that is not the image open in QuPath is named; the files stay where they are. */
     String notPlacedSentence(Map r, String what) {
         def target = applyToOf(r)
+        String problem = (runSnapshot != null && target != null) ? runSnapshot.targetProblem(qupath, target as String) : null
+        if (problem != null) {
+            targetNote = problem
+            LcLog.warn("results of run " + runSnapshot.runId + " not placed [" + LcRun.CODE_TARGET_UNAVAILABLE + "]: " + problem)      // the code of conformance host_internal_codes; the person reads the sentence
+            return "Not placed on an image: " + problem
+        }      // the image of this run is gone or changed (SPEC 4.4): the sentence names the run and the folder
         def chosen = target ? imageChoiceAtRun[target] : null
         def where = r.path ? " The " + what + " are in " + r.path : ""
         if (chosen == LcDialog.FILE_CHOICE) { resultNotes << LcConst.FILE_INPUT_NOTE; return "Not placed on an image: " + LcConst.FILE_INPUT_NOTE + "." + where }      // also in the status line
@@ -2614,9 +2644,10 @@ class LcDialog {
         def name = appName + ":" + r.name
         def hierarchy = data.hierarchy
         def previous = hierarchy.annotationObjects.findAll { it.name == name }
-        if (previous && currentTool.outputs.any { it.name == r.name && it.replace }) hierarchy.removeObjects(previous, true)   // Replace()
+        if (previous && LcRun.toolOf(this).outputs.any { it.name == r.name && it.replace }) hierarchy.removeObjects(previous, true)   // Replace()
         def obj = PathObjects.createAnnotationObject(ROIs.createPointsROI(xs as double[], ys as double[], placementPlane(area)))
         obj.name = name
+        runSnapshot?.tag(obj)             // the run id, app and tool of THIS run (SPEC 4.5)
         hierarchy.addObject(obj)
         return xs.size() + " point(s) added to the open image as the annotation '" + name + "'." + offsetNote(area)
     }
@@ -2644,11 +2675,12 @@ class LcDialog {
         def built = shapeAnnotations(collection, prefix, area, placementPlane(area))
         def objects = built.objects, holes = built.holes, total = collection.features.size()
         def hierarchy = data.hierarchy
-        def replacing = currentTool.outputs.any { it.name == r.name && it.replace }
+        def replacing = LcRun.toolOf(this).outputs.any { it.name == r.name && it.replace }
         if (replacing) {
             def previous = hierarchy.annotationObjects.findAll { it.name?.startsWith(prefix + " ") }
             if (previous) hierarchy.removeObjects(previous, true)       // Replace()
         }
+        objects.each { runSnapshot?.tag(it) }
         hierarchy.addObjects(objects)
         def text = objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>'."
         if (total > LcConst.MAX_SHAPES) text += " '" + r.name + "': showing the first " + LcConst.MAX_SHAPES + " of " + total + " outlines."

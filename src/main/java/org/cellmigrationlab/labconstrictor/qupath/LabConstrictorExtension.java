@@ -18,7 +18,9 @@ import qupath.lib.gui.extensions.QuPathExtension;
  * QuPath has started.
  */
 public class LabConstrictorExtension implements QuPathExtension {
-    private static final String SCRIPT = "/org/cellmigrationlab/labconstrictor/qupath/LabConstrictorTools.groovy";
+    private static final String FOLDER = "/org/cellmigrationlab/labconstrictor/qupath/";
+    /** The script files in the order they are joined into one Groovy script (the file names are the lines of parts.txt; the first is the main script). */
+    private static final String PARTS = FOLDER + "parts.txt";
 
     @Override
     public void installExtension(QuPathGUI qupath) {
@@ -47,9 +49,7 @@ public class LabConstrictorExtension implements QuPathExtension {
             if (testFile != null) {
                 text = new String(Files.readAllBytes(Paths.get(testFile)), StandardCharsets.UTF_8);
             } else {
-                try (InputStream in = getClass().getResourceAsStream(SCRIPT)) {
-                    text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-                }
+                text = joinedScript();
             }
             Binding binding = new Binding();
             binding.setVariable("qupath", qupath);
@@ -58,6 +58,27 @@ public class LabConstrictorExtension implements QuPathExtension {
             t.printStackTrace();
             Alert alert = new Alert(Alert.AlertType.ERROR, "LabConstrictor tools could not start: " + t);
             alert.show();
+        }
+    }
+
+    /** The text of every script file listed in parts.txt, one after the other, as one script (what tests/run_gui_test.sh and build.sh also do). */
+    private String joinedScript() throws java.io.IOException {
+        StringBuilder all = new StringBuilder();
+        for (String line : resourceText(PARTS).split("\\R")) {
+            String name = line.trim();
+            if (!name.isEmpty()) {
+                all.append(resourceText(FOLDER + name)).append('\n');
+            }
+        }
+        return all.toString();
+    }
+
+    private String resourceText(String path) throws java.io.IOException {
+        try (InputStream in = getClass().getResourceAsStream(path)) {
+            if (in == null) {
+                throw new java.io.IOException("the resource " + path + " is missing from the extension jar");
+            }
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
 

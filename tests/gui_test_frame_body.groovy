@@ -14,6 +14,7 @@ def OUT = new File(System.getProperty("lc.test.out", "/tmp/qp_shots")); OUT.mkdi
 def FIXTURES = System.getProperty("lc.test.fixtures", new File("tests/fixtures").absolutePath)
 def ASYM = FIXTURES + "/asym.tif", ASYM_ZT = FIXTURES + "/asym_zt.tif"
 def results = [:]
+LcRetention.pruneCommandFor = { Map entry -> [entry.python as String, "-c", "pass"] as List<String> }      // no clean-up while this body counts the folders of the results folder (the real prune is checked by gui_test_retention_body.groovy)
 def fx = { Closure c ->
     if (Platform.isFxApplicationThread()) return c()
     def latch = new CountDownLatch(1); def box = [null, null]

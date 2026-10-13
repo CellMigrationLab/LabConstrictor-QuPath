@@ -62,7 +62,7 @@ Thread.start("lc-gui-test") {
         def home = new File(System.getenv("LC_HOME")); assert home.path.contains("lhome_form")
         home.deleteDir(); def apps = new File(home, "apps"); apps.mkdirs()
         def P = { String name, String type, Map more = [:] -> [name: name, label: name.capitalize().replace("_", " "), type: type, required: more.required != false && !more.nullable] + more }
-        def schema = [protocol: 1, tools: [
+        def schema = [protocol: 1, tools_version: "0.3.0a1", features: ["reserved_inputs_v1", "retention_prune"], tools: [
             [id: "order", label: "Order", description: "", outputs: [], inputs: [
                 P("a", "string"), P("x1", "integer", [group: "G1", default: 1]), P("b", "string"), P("x2", "float", [group: "G1", default: 2.5]),
                 P("c1", "integer", [group: "C", group_collapsed: true, default: 3]), P("d", "string"), P("c2", "float", [group: "C", group_collapsed: true, default: 4.5]),

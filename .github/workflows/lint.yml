@@ -1,4 +1,4 @@
-# Lints the QuPath script (LabConstrictorTools.groovy) with npm-groovy-lint (CodeNarc rules); the rules are set in .groovylintrc.json.
+# Lints the QuPath script (the files listed in parts.txt, joined into one) with npm-groovy-lint (CodeNarc rules); the rules are set in .groovylintrc.json.
 #
 # The GUI tests in tests/ run in their own workflow, qupath-gui.yml.
 name: lint
@@ -20,9 +20,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Part files stay below 600 lines (LabConstrictorTools.groovy is the grandfathered main script, from before the split)
+        run: |
+          RES=src/main/resources/org/cellmigrationlab/labconstrictor/qupath
+          status=0
+          while IFS= read -r part || [ -n "$part" ]; do
+            [ -z "$part" ] || [ "$part" = "LabConstrictorTools.groovy" ] && continue
+            lines=$(wc -l < "$RES/$part")
+            echo "$part: $lines lines"
+            [ "$lines" -lt 600 ] || { echo "::error file=$RES/$part::$part has $lines lines (the limit is 600): split it into a new file and list it in parts.txt"; status=1; }
+          done < "$RES/parts.txt"
+          exit $status
+      - name: Join the script files (parts.txt) into the one script the extension runs
+        # CodeNarc reads one file at a time, so a class used from another file would not resolve: the joined text is what is linted
+        run: |
+          RES=src/main/resources/org/cellmigrationlab/labconstrictor/qupath
+          mkdir lint-input
+          { while IFS= read -r part || [ -n "$part" ]; do [ -z "$part" ] || { cat "$RES/$part"; echo; }; done < "$RES/parts.txt"; } > lint-input/LabConstrictorTools-all.groovy
       - name: Lint the script (fails on any finding)
         run: >
           npx --yes npm-groovy-lint@18.0.0
-          --path src/main/resources/org/cellmigrationlab/labconstrictor/qupath
+          --path lint-input
           --files "**/*.groovy"
+          --config .groovylintrc.json
           --failon info

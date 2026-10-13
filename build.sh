@@ -8,3 +8,7 @@ rm -rf target/classes && mkdir -p target/classes
 cp -r src/main/resources/* target/classes/
 "${JAVA_HOME:+$JAVA_HOME/bin/}jar" cf target/labconstrictor-qupath-0.1.0.jar -C target/classes .
 echo "built target/labconstrictor-qupath-0.1.0.jar"
+# one file with the whole script, for QuPath's Script Editor (the jar joins the files listed in parts.txt itself)
+RES=src/main/resources/org/cellmigrationlab/labconstrictor/qupath
+{ while IFS= read -r part || [ -n "$part" ]; do [ -z "$part" ] || { cat "$RES/$part"; echo; }; done < "$RES/parts.txt"; } > target/LabConstrictorTools-all.groovy
+echo "built target/LabConstrictorTools-all.groovy (all parts in one file, for the Script Editor)"

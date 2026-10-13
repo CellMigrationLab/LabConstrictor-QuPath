@@ -32,6 +32,9 @@ Choose **Extensions > LabConstrictor tools...**, pick an app and a tool, and pre
 ## If something does not work
 
 - The status line and **Details** show what failed. The log is `~/.labconstrictor/logs/labconstrictor.log`.
+- Results and run records are kept in `~/.labconstrictor/results` and `~/.labconstrictor/runs`. The extension never deletes them; after each run it starts `labconstrictor-tools prune`, which keeps the newest 20 results and 50 run records and removes only folders LabConstrictor made and finished. Folders from older versions of the extension are not removed automatically.
+- The app's `labconstrictor-tools` must be 0.3.0a1 or newer; with an older one the run is refused and the status line says to update it.
+- If you open another image while a tool runs, the results are not drawn on the new image: the status line says where the files are.
 - `labconstrictor-tools doctor` shows which apps are registered.
 
 Source and issues: [LabConstrictor-QuPath](https://github.com/CellMigrationLab/LabConstrictor-QuPath).

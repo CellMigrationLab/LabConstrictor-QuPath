@@ -126,9 +126,9 @@ Thread.start("lc-gui-test") {
         expect("the_record_keeps_results_but_not_the_host_folder", rec.results instanceof List && !rec.results.isEmpty() && !rec.inputs.containsKey("_job_dir"), [rec.results, rec.inputs])
         expect("the_record_keeps_the_interpreter_diagnostics_and_timings", rec.interpreter != null && rec.timings != null, [rec.interpreter, rec.timings])
         // other endings, written directly: failure with its code and traceback, cancellation, crash; the big matrix is left out
-        def folderOf = { Map outcome -> LcRuns.record([entry: [version: "1.2"], app: "interactions", tool: "x/y z", inputs: [a: 1L, _job_dir: "/tmp/j"], outcome: outcome, seconds: 1.234, stderr: "e" * 5000]) }
+        def folderOf = { Map outcome -> LcRuns.record([entry: INTERACTIONS, app: "interactions", tool: "x/y z", inputs: [a: 1L, _job_dir: "/tmp/j"], outcome: outcome, seconds: 1.234, stderr: "e" * 5000]) }
         def failed = LcJson.parse(new File(folderOf([responseType: "FAILURE", error: "[bad_parameter] no", code: "bad_parameter", trace: "Traceback (most recent call last)"]), "run.json"))
-        expect("a_failed_run_has_status_code_and_traceback", failed.status == "FAILED" && failed.code == "bad_parameter" && failed.error == "[bad_parameter] no" && failed.traceback == "Traceback (most recent call last)" && failed.app_version == "1.2" && failed.seconds == 1.23d, failed)
+        expect("a_failed_run_has_status_code_and_traceback", failed.status == "FAILED" && failed.code == "bad_parameter" && failed.error == "[bad_parameter] no" && failed.traceback == "Traceback (most recent call last)" && failed.app_version == INTERACTIONS.version && failed.seconds == 1.23d, failed)
         expect("a_record_keeps_the_last_4000_characters_of_the_worker_output", failed.stderr_tail.size() == 4000, failed.stderr_tail.size())
         expect("a_cancelled_run_is_canceled_and_a_crash_is_crashed", LcJson.parse(new File(folderOf([responseType: "CANCELATION"]), "run.json")).status == "CANCELED" && LcJson.parse(new File(folderOf([responseType: "CRASH", error: "x"]), "run.json")).status == "CRASHED")
         def withMatrix = LcJson.parse(new File(folderOf([responseType: "COMPLETION", outputs: [results: [[type: "affine", matrix_yx: [[1, 0, 0]], name: "m"]]]]), "run.json"))
@@ -151,7 +151,7 @@ Thread.start("lc-gui-test") {
         (1..60).each { new File(runsDir, String.format("20200101T0000%02d000000_a_b", it)).mkdirs() }
         new File(runsDir, "notes").mkdirs()
         def oldRecords = (runsDir.listFiles() ?: []).findAll { it.isDirectory() }*.name.sort()
-        def written = (1..60).collect { LcRuns.record([entry: [:], app: "interactions", tool: "t", inputs: [:], outcome: [responseType: "COMPLETION"], seconds: 0d, stderr: ""]) }
+        def written = (1..60).collect { LcRuns.record([entry: INTERACTIONS, app: "interactions", tool: "t", inputs: [:], outcome: [responseType: "COMPLETION"], seconds: 0d, stderr: ""]) }
         def after = (runsDir.listFiles() ?: []).findAll { it.isDirectory() }*.name.sort()
         expect("no_run_record_is_deleted", after.containsAll(oldRecords) && written.every { it != null && new File(it, "run.json").isFile() } && after.size() >= oldRecords.size() + 60, [oldRecords.size(), after.size()])
         expect("the_oldest_records_and_a_foreign_folder_survive", new File(runsDir, "20200101T000001000000_a_b").isDirectory() && new File(runsDir, "notes").isDirectory())
