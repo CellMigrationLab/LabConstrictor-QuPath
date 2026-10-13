@@ -263,8 +263,24 @@ Thread.start("lc-gui-test") {
         def s10f = seen()
         expect("CF-10f_mask_on_the_viewer_plane_runs_on_that_plane", s10f != null && s10f.image_first == 10000 && s10f.mask_pixels.size() == 6 && annotationsNamed("frame:marks")[0].ROI.t == 1 && annotationsNamed("frame:marks")[0].ROI.z == 0, [s10f, status(dlg)])
         useSelection(false)
+        // the Image area carries the viewer plane too: a selection area on (1, 1) exports (1, 1), and a selection on (0, 0) is refused while the viewer shows (1, 1)
+        setPlane(1, 1)
+        select([rectXY(3, 2, 6, 4, 1, 1)]); setArea("Selected annotation(s)"); setPoint(1, 1)
+        run(dlg)
+        def s10h = seen()
+        def ph = annotationsNamed("frame:marks")
+        expect("CF-10h_selection_area_exports_the_viewer_plane", s10h != null && s10h.image_shape == [2, 3] && s10h.image_first == 11203 && ph.size() == 1 && ph[0].ROI.z == 1 && ph[0].ROI.t == 1, [s10h, status(dlg)])
+        select([rectXY(3, 2, 6, 4, 0, 0)]); setArea("Selected annotation(s)")
+        run(dlg)
+        expect("CF-10h_a_selection_on_plane_0_0_is_refused_while_the_viewer_shows_1_1", reason() == "selection_plane_mismatch" && status(dlg).contains("z=0 t=0") && status(dlg).contains("z=1 t=1"), status(dlg))
+        // the viewport is the viewer's own plane
+        fx { hierarchy().clearAll(); null }; setArea("Current viewport")
+        run(dlg)
+        def s10v = seen()
+        expect("CF-10h_viewport_area_exports_the_viewer_plane", s10v != null && s10v.image_first >= 11000 && s10v.image_first < 12000 && annotationsNamed("frame:marks").every { it.ROI.z == 1 && it.ROI.t == 1 }, [s10v, status(dlg)])
+        setArea("Whole image"); setPlane(0, 1)
         // the plane is the one at run start: it is read once for the whole run (no plane read while exporting or placing)
-        expect("CF-10g_plane_is_frozen_at_run_start", fx { dlg.planeAtRun } == [z: 0, t: 1], fx { dlg.planeAtRun })
+        expect("CF-10g_plane_is_frozen_at_run_start", fx { dlg.planeAtRun } == [z: 1, t: 1] && fx { [qupath.viewer.getZPosition(), qupath.viewer.getTPosition()] } == [0, 1], [fx { dlg.planeAtRun }, fx { [qupath.viewer.getZPosition(), qupath.viewer.getTPosition()] }])      // the last run started on (1, 1); the viewer has moved on since
         // a project image (not the one the viewer shows) has no viewer plane: plane 0 / 0 and its results are not drawn (table and file)
         // the unit: checkSelectionPlane
         def roi = { int z, int t -> [z: z, t: t] }
