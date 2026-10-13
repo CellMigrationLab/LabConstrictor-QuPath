@@ -6,11 +6,22 @@ QuPath 0.7. The form is generated from the tool's declared schema ([LabConstrict
 so QuPath never imports the app's packages and needs no Python of its own. Same idea as the Napari and Fiji front-ends.
 
 ## Install
-1. Install the LabConstrictor app(s) (the installer registers them; check with `labconstrictor-tools list`).
-2. Drop `labconstrictor-qupath-0.1.0.jar` on the QuPath window (or into the QuPath extensions folder) and restart QuPath.
-3. **Extensions > LabConstrictor tools...**
+1. Install a LabConstrictor app (NucleiSky, CellTracksColab, ...): its installer registers the app and its tools (check with `labconstrictor-tools list`).
+2. Download `labconstrictor-qupath-<tag>.jar` from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases), drag it onto the QuPath window (or copy it into the extensions folder shown in QuPath's Preferences) and restart QuPath.
+3. Open **Extensions > LabConstrictor tools...**
 
-Without the jar: the script is several files now (`src/main/resources/org/cellmigrationlab/labconstrictor/qupath/`, joined in the order of `parts.txt`; the first is the main script). `./build.sh` also writes `target/LabConstrictorTools-all.groovy`, all of them in one file: open that one in QuPath's Script Editor and run it. The main script alone no longer runs.
+For scripters, a second way that needs no jar: download `LabConstrictorTools-all.groovy` from the same release (the whole script in one file), open it in QuPath's Script Editor and run it.
+Every release lists the QuPath version it was built against and the minimum Tools version in its notes; `SHA256SUMS` holds the checksums of the files.
+
+**QuPath versions and systems.** Built against QuPath **0.7.0**; QuPath 0.7 is built with Java 25 and the jar needs it, so older QuPath versions are not supported, and other 0.7.x versions are not tested.
+* **Linux**: tested in CI (QuPath 0.7.0 on a virtual screen: the whole GUI test suite on every pull request, and the smoke test of the exact release jar before a release is published; a broken jar is not published).
+* **macOS (Apple silicon) and Windows**: tried by the release workflow with the same jar in the QuPath 0.7.0 build of that system (menu entry, dialog, a registered app in the list, quoting, trust checks, results folders, clean-up). These runs inform but never block a release; see the job summary of the "release" workflow for the latest result. Last dry run: macOS all steps passed; Windows: the jar loads, the dialog opens and lists the app, the results-folder test passes; three of the test bodies fail there because they use POSIX tools or POSIX file permissions (the Windows trust note: the owner/mode checks of the registry do not exist on Windows, so a group-writable entry is accepted; the clean-up test needs `chmod`), so the clean-up while a results folder is in use is **not** verified on Windows. Not tested by a person on either system.
+
+### Troubleshooting
+* No entry **Extensions > LabConstrictor tools...**: the jar needs QuPath 0.7 (Help > About shows the version); restart QuPath after adding the jar and check that it is in the extensions folder.
+* "No LabConstrictor app is registered on this machine": install a LabConstrictor app first, then press **Rescan apps**.
+* An app is listed as skipped, or a run is refused with "... labconstrictor-tools X is older than the 0.3.0a1 this host needs: update it": update the app (its Tools must be 0.3.0a1 or newer).
+* The log is `~/.labconstrictor/logs/labconstrictor.log` (or `$LC_HOME/logs/`); the status line and **Details** of the window show what failed.
 
 Needs **labconstrictor-tools 0.3.0a1 or newer** in the app's environment (the run record and the clean-up use its helpers and its `prune` command). A run of an app with an older one is refused with `this app's labconstrictor-tools 0.2.0rc1 is older than the 0.3.0a1 this host needs: update it`.
 
@@ -108,7 +119,11 @@ Each of these is deliberate and is written once to QuPath's log (logger `labcons
 * Label images are shown as a preview, not converted to QuPath annotations/detections, and tables are not added to the measurements.
 * No headless/script API, no Windows/macOS testing, no menu entry per tool.
 
-## Build and test
+## Build from source, and test
+Users get the jar from the Releases page (see Install). Developers: `QUPATH=/path/to/QuPath JAVA_HOME=<JDK 25> ./build.sh` writes `target/labconstrictor-qupath-0.1.0.jar` (set `LC_QUPATH_VERSION` for another version) and `target/LabConstrictorTools-all.groovy`.
+
+**Releases.** `.github/workflows/release.yml` runs when a release is published: it builds `labconstrictor-qupath-<tag>.jar` (the tag is the version in the jar's manifest), starts that jar in QuPath 0.7.0 on a virtual screen (`tests/smoke_jar.sh`: the menu entry exists and the dialog opens), and only then attaches the jar, `LabConstrictorTools-all.groovy` and `SHA256SUMS` to the release and appends the QuPath and Tools versions to its notes. Run it by hand (Actions > release > Run workflow, with a tag name) for a dry run: same build and smoke test, files kept as workflow artifacts, no release. The same jar is then tried on Windows and macOS (`os-smoke` jobs, `tests/smoke_os.sh`, apps registered by `tests/ci_setup_os.sh`): best effort, they never block the release (`publish` waits for the Linux job only).
+
     QUPATH=/path/to/QuPath JAVA_HOME=<JDK 25> ./build.sh        # QuPath 0.7 is built with Java 25
     QUPATH=/path/to/QuPath LC_HOME=<registry with NucleiSky and CellTracksColab> tests/run_gui_test.sh   # needs xvfb; 21 checks
 

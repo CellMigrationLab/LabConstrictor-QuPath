@@ -5,20 +5,20 @@ The extension runs the tools of every installed LabConstrictor app from QuPath, 
 > [!WARNING]
 > **Under heavy construction.** This plugin is untested and unlikely to be stable. Expect bugs, missing features and changes without notice. Do not rely on it for work you cannot redo.
 >
-> For QuPath 0.7. There is no ready-made file yet; the jar is built from its repository.
+> For QuPath 0.7 (tested with 0.7.0 on Linux; not tested on Windows or macOS). The jar is attached to each release; until the first release is published, build it from the repository.
 
 ## What you need
 
 - [QuPath](https://qupath.github.io) 0.7.
 - At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the extension finds it.
-- To build the jar: JDK 25 (QuPath 0.7 is built with Java 25), as described in the repository's README.
+- Only to build the jar yourself: JDK 25 (QuPath 0.7 is built with Java 25), as described in the repository's README.
 
 ## Install
 
-1. Get the [LabConstrictor-QuPath](https://github.com/CellMigrationLab/LabConstrictor-QuPath) repository and build `labconstrictor-qupath-0.1.0.jar` as its README describes.
-2. Drop the jar onto the QuPath window, or put it in the QuPath extensions folder, and restart QuPath.
+1. Download `labconstrictor-qupath-<tag>.jar` from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases).
+2. Drop the jar onto the QuPath window, or put it in the QuPath extensions folder (shown in QuPath's Preferences), and restart QuPath.
 
-Without the jar: open `LabConstrictorTools.groovy` (under `src/main/resources/org/cellmigrationlab/labconstrictor/qupath/`) in QuPath's Script Editor and run it.
+Without the jar: download `LabConstrictorTools-all.groovy` from the same release, open it in QuPath's Script Editor and run it.
 
 ## Open it
 
