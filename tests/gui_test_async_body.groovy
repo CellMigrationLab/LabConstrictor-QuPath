@@ -103,6 +103,29 @@ Thread.start("lc-gui-test") {
         expect("ASY-02_it_is_still_pending_and_shows_no_choices_after_the_old_reply", fx { dlg.lookups.isPending("mode") && !dlg.choiceBoxes["mode"].visible && dlg.choiceBoxes["mode"].items.isEmpty() }, [fx { dlg.lookups.isPending("mode") }, shown("mode"), itemsOf("mode")])
         expect("ASY-02_the_new_question_is_answered_for_the_new_value_and_not_the_old_one", waitFor({ shown("mode") && itemsOf("mode") == ["", "a1:" + gate2.name, "a2:" + gate2.name] }, 30) && !fx { dlg.lookups.isPending("mode") } && !itemsOf("mode").any { it.contains(gate1.name) }, [shown("mode"), itemsOf("mode")])
 
+        // ---- the five parts of a lookup's identity, one at a time (SPEC 5.2): a reply that differs from the current question in only ONE of them is dropped whole, the same reply with all five is applied
+        pick(dlg, "runs", "Tool B")
+        waitFor({ shown("mode") }, 30)
+        def modeParam = fx { dlg.currentTool.inputs.find { it.name == "mode" } }
+        def depsNow = fx { LcJson.toJson(dlg.choiceRequest(modeParam)) }
+        def reqOf = { Map over -> [gen: LcLookups.FORM_GENERATION.get(), app: "runs", tool: "tool_b", param: "mode", id: fx { dlg.lookups.latestId("mode") }, deps: depsNow] + over }
+        def tryApply = { Map req -> fx { int before = dlg.lookups.droppedReplies.size(); dlg.lookups.apply(req, ["zz1", "zz2"], null); [dropped: dlg.lookups.droppedReplies.size() > before, items: dlg.choiceBoxes["mode"].items.toList()] } }
+        def untouched = ["", "b1", "b2", "b3"]
+        def byGen = tryApply(reqOf([gen: LcLookups.FORM_GENERATION.get() - 1]))
+        expect("ASY-02_a_reply_of_another_form_generation_is_dropped", byGen.dropped && byGen.items == untouched, byGen)
+        def byApp = tryApply(reqOf([app: "adv"]))
+        expect("ASY-02_a_reply_of_another_app_is_dropped", byApp.dropped && byApp.items == untouched, byApp)
+        def byTool = tryApply(reqOf([tool: "tool_a"]))
+        expect("ASY-02_a_reply_of_another_tool_is_dropped", byTool.dropped && byTool.items == untouched, byTool)
+        def byId = tryApply(reqOf([id: fx { dlg.lookups.latestId("mode") } - 1]))
+        expect("ASY-02_a_reply_that_is_not_the_latest_request_of_the_parameter_is_dropped", byId.dropped && byId.items == untouched, byId)
+        def byDeps = tryApply(reqOf([deps: '{"key":"other"}']))
+        expect("ASY-02_a_reply_for_other_dependencies_than_the_current_ones_is_dropped", byDeps.dropped && byDeps.items == untouched, byDeps)
+        def byParam = tryApply(reqOf([param: "nothing"]))
+        expect("ASY-02_a_reply_for_a_parameter_the_form_does_not_have_is_dropped", byParam.dropped && byParam.items == untouched, byParam)
+        def all = tryApply(reqOf([:]))
+        expect("ASY-02_the_same_reply_with_all_five_parts_current_is_applied", !all.dropped && all.items == ["", "zz1", "zz2"], all)
+
         // ---- ASY-03: A's lookup fails after the switch to B: no error and no tooltip on any B field
         def gateF = gateOf("asy03")
         pick(dlg, "runs", "Tool A that fails")

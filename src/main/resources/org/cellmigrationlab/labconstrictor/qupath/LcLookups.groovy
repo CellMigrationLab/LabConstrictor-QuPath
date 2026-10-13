@@ -58,6 +58,9 @@ class LcLookups {
     /** Forget what waits (the form it belonged to is gone). The question in flight, if any, is dropped when it answers. */
     void forgetWaiting() { synchronized (lock) { waiting.clear(); pendingParams.clear() } }
 
+    /** The id of the newest question issued for `param` (0 when none). */
+    int latestId(String param) { synchronized (lock) { return latest[param] ?: 0 } }
+
     boolean isPending(String param) { synchronized (lock) { return pendingParams.contains(param) } }
 
     int inFlightCount() { return inFlight != null ? 1 : 0 }
