@@ -105,7 +105,7 @@ Thread.start("lc-gui-test") {
         // ---- (a) the size guard
         System.setProperty(PROP, "1000")      // the fixture has 4800 pixels
         expect("budget_comes_from_the_property", LcArea.budget() == 1000L, LcArea.budget())
-        fx { dlg.worker = null }
+        fx { dlg.stopWorker(true); null }      // no worker is running (the guard must refuse before any is started)
         def jobsBefore = new File(LcRegistry.searchPath().first().parentFile, "results").list()?.length ?: 0
         run(dlg)
         def refused = status(dlg)

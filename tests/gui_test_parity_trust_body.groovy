@@ -19,7 +19,7 @@ def newPrefix = { String name ->
     chmod("755", prefix); chmod("755", bin); chmod("755", python)
     return [prefix, bin, python]
 }
-def GOOD_SCHEMA = [protocol: 1, tools: [[id: "t.one-2", label: "T", inputs: [[name: "x_1", label: "X", type: "string"]], outputs: []]]]
+def GOOD_SCHEMA = [protocol: 1, tools_version: "0.3.0a1", features: ["reserved_inputs_v1", "retention_prune"], tools: [[id: "t.one-2", label: "T", inputs: [[name: "x_1", label: "X", type: "string"]], outputs: []]]]
 // writes <name>.json and its schema; `entryMods` and `schemaMods` are applied to the maps before they are written
 def mk = { String name, Closure entryMods = null, Closure schemaMods = null ->
     def (prefix, bin, python) = newPrefix(name)
@@ -57,6 +57,12 @@ mk("trust_param_name_space") { e, p -> } { s -> s.tools[0].inputs[0].name = "a b
 mk("trust_tool_id_path") { e, p -> } { s -> s.tools[0].id = "../x" }
 mk("trust_protocol_2") { e, p -> } { s -> s.protocol = 2 }
 mk("trust_tool_no_outputs") { e, p -> } { s -> s.tools[0].remove("outputs") }
+mk("trust_tools_old") { e, p -> } { s -> s.tools_version = "0.2.0rc1" }
+mk("trust_tools_no_feature") { e, p -> } { s -> s.features = ["reserved_inputs_v1"] }
+mk("trust_tools_no_fields") { e, p -> } { s -> s.remove("tools_version"); s.remove("features") }
+mk("trust_tools_no_version") { e, p -> } { s -> s.remove("tools_version") }
+mk("trust_tools_banana") { e, p -> } { s -> s.tools_version = "banana" }
+mk("trust_tools_newer") { e, p -> } { s -> s.tools_version = "0.10.0"; s.features = ["reserved_inputs_v1", "retention_prune", "later"] }
 mk("trust_owner_other") { e, p -> }.with { if (canChown) assert ["chown", "tester", it[0].path].execute().waitFor() == 0 }
 mk("trust_schema_owner_other").with { if (canChown) assert ["chown", "tester", it[1].path].execute().waitFor() == 0 }
 
@@ -89,6 +95,14 @@ refused("trust_param_name_space", "parameter without an identifier name")
 refused("trust_tool_id_path", "a tool has an unexpected structure")
 refused("trust_protocol_2", "schema protocol 2 is not supported (this host speaks [1])")
 refused("trust_tool_no_outputs", "a tool has an unexpected structure")
+// the compatibility rules (LcCompat, the vectors of conformance.json): an app whose Tools lacks what this host needs is not offered, with one sentence; an unparsable version only warns
+refused("trust_tools_old", "this app's labconstrictor-tools 0.2.0rc1 is older than the 0.3.0a1 this host needs: update it")
+refused("trust_tools_no_feature", "this app's labconstrictor-tools lacks retention_prune: update it")
+refused("trust_tools_no_fields", "this app's labconstrictor-tools is too old (it lists no features, this host needs reserved_inputs_v1, retention_prune): update it")
+refused("trust_tools_no_version", "this app's labconstrictor-tools is too old (no version recorded, this host needs 0.3.0a1 or newer): update it")
+expect("trust_tools_banana_is_offered_with_a_warning", loaded.contains("trust_tools_banana") && problemOf("trust_tools_banana") == null && (registry.warnings as List<String>).any { it.startsWith("trust_tools_banana: the labconstrictor-tools version 'banana' of this app is not understood") }, [registry.warnings, problemOf("trust_tools_banana")])
+expect("trust_tools_newer_is_offered_without_a_warning", loaded.contains("trust_tools_newer") && !(registry.warnings as List<String>).any { it.startsWith("trust_tools_newer") }, registry.warnings)
+expect("trust_a_good_app_has_no_warning", !(registry.warnings as List<String>).any { it.startsWith("trust_ok:") }, registry.warnings)
 if (canChown) {
     refused("trust_owner_other", "entry file is not owned by the current user")
     refused("trust_schema_owner_other", "schema file is not owned by the current user")

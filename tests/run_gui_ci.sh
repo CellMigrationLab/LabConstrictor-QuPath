@@ -20,6 +20,8 @@ declare -A needs=(
   [gui_test_calibration_body.groovy]="frame"
   [gui_test_retention_body.groovy]="runs"
   [gui_test_numbers_body.groovy]="runs"
+  [gui_test_async_body.groovy]="runs adv"
+  [gui_test_conformance_body.groovy]="interactions"
   [gui_test_identity_body.groovy]="runs frame"
 )
 for b in area buttons channel copy fallbacks interactions region shapes widgets; do needs[gui_test_${b}_body.groovy]="interactions"; done
@@ -29,7 +31,7 @@ needs[gui_test_parity_cancel_body.groovy]="LabConstrictorPlayground interactions
 declare -A scratch=([gui_test_parity_trust_body.groovy]=lhome_trust [gui_test_parity_form_body.groovy]=lhome_form [gui_test_parity_host_body.groovy]=lhome_host
   [gui_test_parity_lifecycle_body.groovy]=lhome_life [gui_test_parity_pixel_body.groovy]=lhome_pixel [gui_test_parity_support_body.groovy]=lhome_support
   [gui_test_retention_body.groovy]=lhome_retention [gui_test_identity_body.groovy]=lhome_identity
-  [gui_test_numbers_body.groovy]=lhome_numbers)
+  [gui_test_numbers_body.groovy]=lhome_numbers [gui_test_async_body.groovy]=lhome_async)
 SHARED_HOME="$LC_HOME"; export LC_SHARED_HOME="$SHARED_HOME"
 # bodies that are skipped (not failed) while their apps are not registered: the bridge of these two apps is not on their main branch yet
 optional="gui_test_body.groovy"
