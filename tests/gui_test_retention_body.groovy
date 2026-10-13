@@ -83,7 +83,8 @@ Thread.start("lc-gui-test") {
         def dlg = fx { lcShow() }
         Thread.sleep(800)
         def names = { File root -> (root.listFiles() ?: []).findAll { it.isDirectory() }*.name.sort() }
-        def json = { File f -> LcJson.parse(f) as Map }
+        def json = { File f -> f.isFile() ? (LcJson.parse(f) as Map) : [missing: f.path] }      // a missing marker is a failed check, not a dead body
+def readText = { File f -> f.isFile() ? f.getText("UTF-8") : "<missing " + f.path + ">" }
         def newest = { File root -> (root.listFiles() ?: []).findAll { it.isDirectory() && !it.name.startsWith(".") }.max { it.name } }
         def owned = { File root -> (root.listFiles() ?: []).findAll { it.isDirectory() && new File(it, ".lc-owner.json").isFile() } }
         // folders Tools itself would treat as eligible (they carry valid markers): the dry run of the real prune lists them as kept (or deleted), never as skipped
@@ -138,8 +139,8 @@ Thread.start("lc-gui-test") {
         def seededResults = seed(resultsRoot, "result", 60, "aaaaaa"), seededRuns = seed(runsRoot, "run", 120, "bbbbbb")
         def before = [names(resultsRoot).size(), names(runsRoot).size()]
         for (int i = 0; i < 60; i++) { fx { dlg.run() }; Thread.sleep(300); waitIdle(dlg, 120); settle() }
-        def intact = { List<File> list -> list.every { new File(it, "sentinel.txt").text.startsWith("old ") } }
-        expect("HRET-01_foreign_folders_survive_60_runs", new File(foreignResult, "x.txt").text == "keep" && new File(foreignRun, "x.txt").text == "keep", names(resultsRoot).take(3))
+        def intact = { List<File> list -> list.every { readText(new File(it, "sentinel.txt")).startsWith("old ") } }
+        expect("HRET-01_foreign_folders_survive_60_runs", readText(new File(foreignResult, "x.txt")) == "keep" && readText(new File(foreignRun, "x.txt")) == "keep", names(resultsRoot).take(3))
         expect("HRET-02_no_old_folder_is_gone_after_60_runs", intact(seededResults) && intact(seededRuns) && names(resultsRoot).size() == before[0] + 60 && names(runsRoot).size() == before[1] + 60, [names(resultsRoot).size(), names(runsRoot).size()])
         expect("HRET-04_prune_was_started_after_every_run", calls().size() >= 1 + 60, calls().size())
         expect("HRET-04_each_prune_saw_the_runs_done_files", calls().drop(1).every { c -> c.done.findAll { k, v -> k.startsWith("runs/2026") }.values().every { it } }, calls().last())
@@ -161,8 +162,8 @@ Thread.start("lc-gui-test") {
         def runsKept = owned(runsRoot).findAll { new File(it, ".lc-done.json").isFile() }
         expect("real_prune_keeps_exactly_the_newest_50_run_records", runsKept.size() == 50, runsKept.size())
         expect("real_prune_kept_the_newest_by_created_not_the_oldest", ownedDone.every { it.name.contains("runs_quick_values") && !it.name.contains("seed") }, ownedDone*.name.take(3))
-        expect("real_prune_never_touches_legacy_foreign_unfinished_renamed_or_linked_folders", legacy.every { new File(it, "legacy.txt").text == "legacy" } && new File(foreignResult, "x.txt").text == "keep" && new File(foreignRun, "x.txt").text == "keep" &&
-                new File(unfinished, "work.txt").text == "active" && new File(renamed, "r.txt").text == "copy" && java.nio.file.Files.isSymbolicLink(link.toPath()) && new File(outside, "precious.txt").text == "precious" && new File(outside, ".lc-done.json").isFile(), survivors.take(5))
+        expect("real_prune_never_touches_legacy_foreign_unfinished_renamed_or_linked_folders", legacy.every { readText(new File(it, "legacy.txt")) == "legacy" } && readText(new File(foreignResult, "x.txt")) == "keep" && readText(new File(foreignRun, "x.txt")) == "keep" &&
+                readText(new File(unfinished, "work.txt")) == "active" && readText(new File(renamed, "r.txt")) == "copy" && java.nio.file.Files.isSymbolicLink(link.toPath()) && readText(new File(outside, "precious.txt")) == "precious" && new File(outside, ".lc-done.json").isFile(), survivors.take(5))
         expect("real_prune_removed_the_old_owned_ones_through_tools_only", !new File(resultsRoot, "20200101T000001_aaaaaa_seed").exists() && !new File(runsRoot, "20200101T000001_bbbbbb_seed").exists(), "")
         useRecorder()
 

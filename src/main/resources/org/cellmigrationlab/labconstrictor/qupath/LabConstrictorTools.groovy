@@ -5,7 +5,9 @@
  * tool's declared schema (see https://github.com/CellMigrationLab/LabConstrictor-Tools, docs/PROTOCOL.md); the tool runs in the app's
  * own Python environment through the LabConstrictor worker (JSON lines on stdin/stdout), so QuPath never imports the app's packages.
  *
- * Use it as the extension jar (Extensions > LabConstrictor tools...) or paste it in the Script Editor and run it.
+ * Use it as the extension jar (Extensions > LabConstrictor tools...). The script is several files, joined in the order of parts.txt (this file first; the others hold the
+ * compatibility check LcCompat, retention and run records LcRetention, run identity LcRunIdentity, and any file added after them): this file alone does not run, because the classes it
+ * uses are in the others. `./build.sh` also writes target/LabConstrictorTools-all.groovy, the whole script in one file, to paste in the Script Editor and run.
  *
  * Sections, in file order: logging (LcLog), JSON (LcJson), image area (LcArea), calibration (LcUnits, LcCal, LcTiff, LcLink), registry and trust checks (LcRegistry), the worker (LcWorker), the dialog (LcDialog:
  * form, copy as command, request, running, results) and the entry point.
