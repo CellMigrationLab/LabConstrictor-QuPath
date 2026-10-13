@@ -701,7 +701,7 @@ class LcDialog {
     Map<String, ComboBox<String>> imageBoxes = [:]
     Map<String, ComboBox<String>> areaBoxes = [:]     // Image area: the area chooser of each image / labels parameter
     volatile Map<String, Map> areasAtRun = [:]        // image parameter -> its area in the run in progress (only parameters with an area other than the whole image)
-    volatile Map<String, Integer> planeAtRun = [z: 0, t: 0]    // the plane the viewer showed when the run started: what the image open in QuPath is exported on and its results are placed on (SPEC 1.1.9, 1.2.7)
+    volatile Map<String, Integer> planeAtRun = planeOf(0, 0)    // the plane the viewer showed when the run started: what the image open in QuPath is exported on and its results are placed on (SPEC 1.1.9, 1.2.7)
     volatile Map<String, Map> framesAtRun = [:]        // image parameter -> [width, height] of what the tool received (SPEC 1.1.7: a result that says ApplyTo and has another size is said)
     List<String> resultNotes = []                      // sentences about the results of the last run that go to the status line (e.g. size_mismatch), said once
     Map<String, String> imageOf = [:]            // pixel-size parameter -> image parameter
@@ -1782,9 +1782,12 @@ class LcDialog {
     Map<String, Integer> viewerPlane() {
         return onFx {
             def viewer = qupath?.viewer
-            viewer?.imageData != null ? [z: viewer.getZPosition() as int, t: viewer.getTPosition() as int] : [z: 0, t: 0]
+            viewer?.imageData != null ? planeOf(viewer.getZPosition() as int, viewer.getTPosition() as int) : planeOf(0, 0)
         } as Map
     }
+
+    /** A plane as the Map [z, t] (the form planeAtRun keeps). */
+    static Map<String, Integer> planeOf(int z, int t) { return [z: z, t: t] }
 
     /** The area of the open image that an Image area choice other than the whole image names, or an LcRefusal that says why there is none. */
     Map resolveArea(Map p, String kind, def server) {
