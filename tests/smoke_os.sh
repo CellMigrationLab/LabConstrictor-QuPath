@@ -17,7 +17,7 @@ cp "$JAR" "$APPDIR/"; JARNAME="$(basename "$JAR")"
 for cfg in "$APPDIR"/*.cfg; do
   line="$(grep -m1 '^app.classpath=' "$cfg" || true)"; [ -n "$line" ] || continue
   sep='/'; case "$line" in *'\'*) sep='\';; esac
-  awk -v new="app.classpath=\$APPDIR$sep$JARNAME" '{ print } !d && /^app.classpath=/ { print new; d = 1 }' "$cfg" > "$cfg.new" && mv "$cfg.new" "$cfg"
+  NEWLINE="app.classpath=\$APPDIR$sep$JARNAME" awk '{ print } !d && /^app.classpath=/ { print ENVIRON["NEWLINE"] ($0 ~ /\r$/ ? "\r" : ""); d = 1 }' "$cfg" > "$cfg.new" && mv "$cfg.new" "$cfg"
   echo "jar added to the class path of $(basename "$cfg")"
 done
 rc=0; summary="$LOGS/summary.md"; echo "| step | result |" > "$summary"; echo "|---|---|" >> "$summary"
@@ -26,8 +26,8 @@ run_qupath() {
   local name="$1" script="$2" home="$3" log="$LOGS/$1.log"; shift 3
   LC_HOME="$home" "$LAUNCHER" -q "-Dlc.qupath.test.script=$(native "$script")" "-Dlc.test.out=$(native "$LOGS/shots_$name")" "-Dlc.test.fixtures=$(native "$REPO/tests/fixtures")" "$@" > "$log" 2>&1 &
   local pid=$! i
-  for ((i = 0; i < ${STEP_TIMEOUT:-300}; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-  if kill -0 "$pid" 2>/dev/null; then echo "TIMEOUT after ${STEP_TIMEOUT:-300}s" >> "$log"; kill -9 "$pid" 2>/dev/null; command -v taskkill >/dev/null 2>&1 && taskkill //F //T //PID "$pid" >/dev/null 2>&1; fi
+  for ((i = 0; i < ${STEP_TIMEOUT:-180}; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+  if kill -0 "$pid" 2>/dev/null; then echo "TIMEOUT after ${STEP_TIMEOUT:-180}s" >> "$log"; kill -9 "$pid" 2>/dev/null; command -v taskkill >/dev/null 2>&1 && taskkill //F //T //PID "$pid" >/dev/null 2>&1; fi
   wait "$pid" 2>/dev/null; echo $? > "$LOGS/$name.code"
 }
 verdict() {   # <name> <what marks the end: regex of the final line>
@@ -43,6 +43,7 @@ verdict() {   # <name> <what marks the end: regex of the final line>
 # 1. the jar itself: menu entry and dialog (the apps of $SHARED are registered)
 LC_SMOKE_APP=interactions run_qupath smoke_jar "$HERE/smoke_jar.groovy" "$SHARED"
 verdict smoke_jar '^SMOKE OK'
+if grep -q 'no gui' "$summary"; then echo "QuPath did not run the script: the other steps are skipped"; echo "| (other steps) | skipped: QuPath did not run the script |" >> "$summary"; [ -z "${GITHUB_STEP_SUMMARY:-}" ] || cat "$summary" >> "$GITHUB_STEP_SUMMARY"; exit 1; fi
 # 2. OS-specific code paths: each body is appended to the joined script (what tests/run_gui_test.sh does)
 declare -A scratch=([gui_test_parity_trust_body.groovy]=lhome_trust [gui_test_parity_lifecycle_body.groovy]=lhome_life [gui_test_retention_body.groovy]=lhome_retention)
 for body in gui_test_parity_quote_body.groovy gui_test_parity_trust_body.groovy gui_test_parity_lifecycle_body.groovy gui_test_retention_body.groovy; do

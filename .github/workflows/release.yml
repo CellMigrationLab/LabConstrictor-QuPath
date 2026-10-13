@@ -112,6 +112,7 @@ jobs:
   os-smoke:
     # Windows and macOS (arm64): the same jar in the pinned QuPath build of that platform, on the runner's desktop. Best effort: these jobs inform
     # (the table in the job summary says pass, fail with the reason, or "no gui"), they never block a release; publish waits for the Linux smoke only.
+    name: os-smoke (${{ matrix.os }})
     needs: build
     runs-on: ${{ matrix.os }}
     continue-on-error: true
