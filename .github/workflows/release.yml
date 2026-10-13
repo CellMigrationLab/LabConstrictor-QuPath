@@ -109,3 +109,13 @@ jobs:
             { cat body.md; echo; echo; cat release-notes-addition.md; } > notes.md
             gh release edit "$TAG" --notes-file notes.md
           fi
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/qupath/qupath/releases/tags/v0.7.0 --jq '.assets[] | [.name, .size, .digest] | @tsv'
+          for n in $(gh api repos/qupath/qupath/releases/tags/v0.7.0 --jq '.assets[].name' | grep -iE 'windows|mac'); do
+            curl -fsSL --retry 5 -o "$n" "https://github.com/qupath/qupath/releases/download/v0.7.0/$n" && sha256sum "$n" && case "$n" in *.zip) unzip -l "$n" | head -15;; esac; rm -f "$n"
+          done
