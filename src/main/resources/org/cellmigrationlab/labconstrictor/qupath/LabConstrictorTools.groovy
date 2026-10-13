@@ -94,6 +94,10 @@ class LcConst {
     static final int CLOSE_WAIT_SECONDS = 10             // a worker that ignores its closed input is killed after this
     static final int CHOICES_DEBOUNCE_MS = 400           // wait for typing to stop before asking for dropdown choices again
     static final int CHOICES_BUSY_RETRY_MS = 1500        // ask again this long after, when the worker was busy with a run
+    static final int LOOKUP_IN_FLIGHT_MAX = 1            // ChoicesFrom lookups running at once per window (conformance limits.lookup_in_flight_max)
+    static final int LOOKUP_PENDING_MAX = 8              // lookups waiting per window; the oldest is dropped and logged (limits.lookup_pending_max)
+    static final int LOOKUP_TIMEOUT_SECONDS = 60         // a lookup that takes longer is ended with its worker (limits.lookup_timeout_s)
+    static final String LOOKUP_TIMEOUT_PROPERTY = "lc.qupath.lookup_timeout_s"      // system property that replaces LOOKUP_TIMEOUT_SECONDS (the tests use it to end a lookup quickly)
     static final int CHOICES_AFTER_RUN_MS = 200          // ask again this long after a run finished
     // text excerpts (characters)
     static final int LOG_LINE_CHARS = 200                // a worker line that is not a protocol message, as logged
@@ -804,12 +808,15 @@ class LcRegistry {
         if (reason) return [problem: entry.name + ": ignored: " + reason, name: entry.name]
         def schema = LcJson.parse(new File(entry.schema_path as String))
         def badSchema = schemaProblem(schema)
-        return badSchema ? [problem: file.name + ": " + badSchema] : [app: [entry: entry, schema: schema], name: entry.name]
+        if (badSchema) return [problem: file.name + ": " + badSchema]
+        Map<String, String> compat = LcCompat.check(schema as Map, LcCompat.MIN_TOOLS_VERSION, LcCompat.REQUIRED_FEATURES)      // what this host needs from the app's Tools (PROTOCOL.md, compatibility rules for hosts)
+        if (compat.status == LcCompat.REFUSE) return [problem: entry.name + ": " + compat.reason, name: entry.name]
+        return [app: [entry: entry, schema: schema], name: entry.name] + (compat.status == LcCompat.WARN ? [warning: entry.name + ": " + compat.reason] : [:])
     }
 
     /** @return [apps: LinkedHashMap name -> [entry: Map, schema: Map], problems: List of "name: reason"] */
     static Map load() {
-        def apps = new LinkedHashMap(), problems = [], skip = [] as Set
+        def apps = new LinkedHashMap(), problems = [], warnings = [], skip = [] as Set
         searchPath().eachWithIndex { File dir, int index ->
             if (!dir.isDirectory()) return
             def files = (dir.listFiles({ File f -> f.name.endsWith(".json") && !f.name.endsWith(".schema.json") } as FileFilter) ?: []).sort { it.name }
@@ -821,19 +828,21 @@ class LcRegistry {
                     if (found.problem) { problems << found.problem; skip << (found.name ?: name); continue }
                     if (apps.containsKey(found.name) || skip.contains(found.name)) continue    // the file name differs from the app name it claims: priority stays with the earlier folder
                     apps[found.name] = found.app
+                    if (found.warning) warnings << found.warning
                 } catch (Exception e) {     // broad on purpose: any broken registry entry (I/O, JSON) is one listed problem, never a failed start
                     LcLog.warn("registry entry '" + name + "' skipped", e)
                     problems << (file.name + ": " + e.message)
                 }
             }
         }
-        return [apps: new LinkedHashMap(apps.sort { it.key }), problems: problems]      // sorted by name, as Napari and the command line list them
+        return [apps: new LinkedHashMap(apps.sort { it.key }), problems: problems, warnings: warnings]      // sorted by name, as Napari and the command line list them
     }
 }
 
 // ---------------------------------------------------------------------------------------------------- the worker
 /** One Python worker process of an app: JSON lines on stdin/stdout, one reader thread per stream, one result queue per running task. */
-class LcWorker {
+class LcWorker implements LcWorkerLike {
+    static final java.util.concurrent.atomic.AtomicInteger STARTED = new java.util.concurrent.atomic.AtomicInteger(0)      // worker processes this JVM has started (the tests count them)
     Process proc
     final Map<String, BlockingQueue<Map>> tasks = new java.util.concurrent.ConcurrentHashMap<>()
     final StringBuffer stderrTail = new StringBuffer()
@@ -848,6 +857,7 @@ class LcWorker {
         def pb = new ProcessBuilder(command)
         LcPython.applyEnvironment(pb, entry)
         proc = pb.start()
+        STARTED.incrementAndGet()
         Thread.start("lc-stdout") {
             try {
                 proc.inputStream.withReader("UTF-8") { reader ->
@@ -882,6 +892,8 @@ class LcWorker {
         }
     }
 
+    boolean alive() { return proc.isAlive() }
+
     /** The worker's last error output (trimmed to the end when it grows too long, see LcConst.STDERR_*). */
     String stderrText() { stderrTail.toString() }
 
@@ -906,10 +918,12 @@ class LcWorker {
         return hintForExit(code, tail) + (code != null ? " (exit code " + code + ")" : "") + (tail ? ". " + tail : "")
     }
 
-    /** Sends one EXECUTE and blocks until its terminal message; `onUpdate` gets (message, current, maximum). */
-    Map run(String toolId, Map inputs, Closure onUpdate) {
+    /** Sends one EXECUTE and blocks until its terminal message; `onUpdate` gets (message, current, maximum). With `timeoutSeconds` above 0 a task that has not ended by then is ended
+     *  together with the worker (a crash text says so): the worker is discarded, never reused. */
+    Map run(String toolId, Map inputs, Closure onUpdate, int timeoutSeconds = 0) {
         def id = "lcq-" + (++counter) + "-" + System.nanoTime()
         cancelRequested = false
+        long deadline = timeoutSeconds > 0 ? System.nanoTime() + timeoutSeconds * 1_000_000_000L : Long.MAX_VALUE
         def queue = new LinkedBlockingQueue<Map>()
         tasks.put(id, queue)
         try {
@@ -918,6 +932,7 @@ class LcWorker {
                 def msg = queue.poll(LcConst.POLL_SECONDS, TimeUnit.SECONDS)
                 if (msg == null) {
                     if (!proc.isAlive()) return endOfRun([responseType: "CRASH", error: crashText()])
+                    if (System.nanoTime() > deadline) { kill(); return endOfRun([responseType: "CRASH", error: "the tool did not answer within " + timeoutSeconds + " s; its worker was ended"]) }
                     continue
                 }
                 def type = msg.responseType
@@ -1004,7 +1019,6 @@ class LcDialog {
     Map<String, ComboBox<String>> channelBoxes = [:]   // PickChannel: the channel chooser of an image parameter
     Map<String, CheckBox> checks = [:]            // the 'set' box of each optional parameter
     Map<String, ComboBox<String>> choiceBoxes = [:]   // ChoicesFrom: the dropdown beside the text field
-    Map<String, Integer> choiceSeq = [:]          // newest question per parameter: older answers are dropped
     PauseTransition choiceTimer = new PauseTransition(Duration.millis(LcConst.CHOICES_DEBOUNCE_MS))
     int idleSeconds = LcConst.WORKER_IDLE_SECONDS      // a kept worker that was not used for this long is closed (Napari keeps it for 10 minutes)
     PauseTransition idleTimer = new PauseTransition(Duration.seconds(LcConst.WORKER_IDLE_SECONDS))
@@ -1028,8 +1042,16 @@ class LcDialog {
     List imageDataListeners = []                 // listeners on QuPath's image property (removed when the window closes)
     boolean programmatic = false                 // true while the host writes a pixel-size field (such a write is never a person's edit)
     Map<String, TextField> fileFields = [:]      // image parameter -> the field for a file path
-    LcWorker worker
-    String workerApp
+    final LcWorkers workers = new LcWorkers({ Map app -> new LcWorker(app.entry) } as Closure<LcWorkerLike>)      // the one owner of the workers of this window (SPEC 5.5)
+    final LcLookups lookups = new LcLookups(this)       // the ChoicesFrom lookups of this window (SPEC 5.1 - 5.4)
+    volatile LcLease runLease                            // the lease of the run in progress: Cancel goes to ITS worker
+    volatile boolean closedWindow = false
+    List warnings = []                                   // apps listed with a warning (their Tools is older than recommended or its version is not understood)
+
+    /** The worker kept for reuse (the one of the last app used), or null. */
+    LcWorker getWorker() { return workers.current as LcWorker }
+
+    String getWorkerApp() { return workers.currentApp }
     volatile boolean running = false
     String lastReport = ""
     Map currentTool
@@ -1038,6 +1060,7 @@ class LcDialog {
         this.qupath = qupath
         this.apps = registry.apps
         this.problems = registry.problems
+        this.warnings = registry.warnings ?: []
         LcUnits.useApps(apps.values().collect { it.entry })      // the unit catalog comes from the labconstrictor-tools of a registered app
     }
 
@@ -1051,11 +1074,21 @@ class LcDialog {
         root.padding = new Insets(10)
         if (apps.isEmpty()) {
             status.text = "No LabConstrictor app is registered on this machine." + (problems ? " Skipped: " + problems.join("; ") : "")
+        } else if (warnings) {
+            status.text = "Warning: " + warnings.join("; ")      // an app is listed, but its Tools is older than recommended or its version is not understood
         }
         stage.scene = new Scene(root)
-        stage.onHidden = { if (running) worker?.cancelRequested = true; stopWorker(false); imageDataListeners.each { qupath?.imageDataProperty()?.removeListener(it as javafx.beans.value.ChangeListener) } }   // also when closed from code
+        stage.onHidden = { if (running) (runLease?.worker as LcWorker)?.cancelRequested = true; closeWindow(); imageDataListeners.each { qupath?.imageDataProperty()?.removeListener(it as javafx.beans.value.ChangeListener) } }   // also when closed from code
         stage.show()
         if (!apps.isEmpty()) appBox.value = apps.keySet().first()
+    }
+
+    /** The window is closed (SPEC 5.6): the waiting lookups are dropped and the thread stops, every worker is closed (a run in progress ends with its worker), nothing is started afterwards. */
+    void closeWindow() {
+        closedWindow = true
+        LcLookups.newGeneration()
+        lookups.close()
+        workers.closeAll(false)
     }
 
     /** Sizes, listeners and actions of the widgets that are fields of the dialog. */
@@ -1125,10 +1158,11 @@ class LcDialog {
         def registry = LcRegistry.load()
         apps = registry.apps
         problems = registry.problems
+        warnings = registry.warnings ?: []
         def current = appBox.value
         appBox.items.setAll(apps.keySet())
         if (current in apps) appBox.value = current else if (!apps.isEmpty()) appBox.value = apps.keySet().first()
-        status.text = "Found " + apps.size() + " app(s)" + (problems ? "; skipped: " + problems.join("; ") : "")
+        status.text = "Found " + apps.size() + " app(s)" + (problems ? "; skipped: " + problems.join("; ") : "") + (warnings ? "; warning: " + warnings.join("; ") : "")
     }
 
     /** A new app was chosen: list its tools. */
@@ -1156,9 +1190,11 @@ class LcDialog {
     void onTool() {
         def app = apps[appBox.value]
         currentTool = app ? toolNames(app.schema.tools)[toolBox.value] : null
+        LcLookups.newGeneration()       // the old form is destroyed (SPEC 5.1): its lookups are stale from now on
+        lookups.forgetWaiting()
         formBox.children.clear()
         getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); areaBoxes.clear(); imageOf.clear(); selectionBoxes.clear(); links.clear(); fileFields.clear()
-        checks.clear(); choiceBoxes.clear(); choiceSeq.clear(); channelBoxes.clear()
+        checks.clear(); choiceBoxes.clear(); channelBoxes.clear()
         description.text = currentTool?.description ?: ""
         if (currentTool == null) return
         def unsupported = unsupportedParameter(currentTool)
@@ -1169,20 +1205,34 @@ class LcDialog {
             return
         }
         buildForm(currentTool.inputs)
+        LcLookups.newGeneration()       // a new form is built
         hookChoices()
         scheduleChoices(0)
     }
 
     // ---- dynamic choices (ChoicesFrom), clear after run
-    /** Asks for the choices again (after a pause in the typing) whenever a parameter the choices depend on changes. */
+    /** A value a ChoicesFrom parameter depends on changes: the choices it showed belong to the old value, so they are invalidated AT ONCE and marked pending (SPEC 5.3); only the new
+     *  question waits for the pause in the typing. */
     void hookChoices() {
         currentTool.inputs.findAll { it.choices_from }.each { p ->
             p.choices_from.depends.each { dep ->
                 def control = controls[dep]
-                if (control instanceof TextField) control.textProperty().addListener({ o, a, b -> scheduleChoices(LcConst.CHOICES_DEBOUNCE_MS) } as javafx.beans.value.ChangeListener)
-                else if (control instanceof ComboBox) control.valueProperty().addListener({ o, a, b -> scheduleChoices(LcConst.CHOICES_DEBOUNCE_MS) } as javafx.beans.value.ChangeListener)
+                def changed = { o, a, b -> lookups.invalidate(p.name as String); markChoicesPending(p.name as String); scheduleChoices(LcConst.CHOICES_DEBOUNCE_MS) } as javafx.beans.value.ChangeListener
+                if (control instanceof TextField) control.textProperty().addListener(changed)
+                else if (control instanceof ComboBox) control.valueProperty().addListener(changed)
             }
         }
+    }
+
+    /** The choices of `name` are not known now (a value they depend on changed): the old dropdown is not shown any more, the text field is, with a tooltip that says why. */
+    void markChoicesPending(String name) {
+        ComboBox<String> combo = choiceBoxes[name]
+        def field = controls[name] as TextField
+        if (combo == null || field == null) return
+        lookups.markPending(name)
+        combo.items.clear()
+        combo.visible = false; combo.managed = false; field.visible = true; field.managed = true
+        field.tooltip = new Tooltip("waiting for the choices...")
     }
 
     /** (Re)starts the timer that resolves the choices; a burst of changes becomes one question. */
@@ -1192,17 +1242,14 @@ class LcDialog {
         choiceTimer.playFromStart()
     }
 
-    /** Starts one worker-side question per ChoicesFrom parameter; each gets a number so a late answer for an older question is dropped. */
+    /** Asks for the choices of every ChoicesFrom parameter (LcLookups: one thread, one question per parameter, stale answers dropped). A run in progress makes the questions wait. */
     void resolveChoices() {
-        if (currentTool == null || choiceBoxes.isEmpty()) return
+        if (currentTool == null || choiceBoxes.isEmpty() || closedWindow) return
         if (running) { scheduleChoices(LcConst.CHOICES_BUSY_RETRY_MS); return }              // the worker is busy with a run: ask again afterwards
-        def app = apps[appBox.value]
-        def appName = appBox.value
         currentTool.inputs.findAll { it.choices_from && choiceBoxes[it.name] }.each { p ->
-            def request = choiceRequest(p)
-            def number = (choiceSeq[p.name] = (choiceSeq[p.name] ?: 0) + 1)
-            if (request == null) { applyChoices(p.name, number, null, "waiting for a value of " + p.choices_from.depends.join(", ")); return }
-            Thread.start("lc-choices") { fetchChoices(p, request, number, app, appName) }
+            Map request = choiceRequest(p)
+            if (request == null) { lookups.invalidate(p.name as String); applyChoices(p.name as String, null, "waiting for a value of " + p.choices_from.depends.join(", ")); return }
+            lookups.ask(p, request)
         }
     }
 
@@ -1219,36 +1266,12 @@ class LcDialog {
         return request
     }
 
-    /** Runs the source tool on the worker thread and hands its answer (or why there is none) to applyChoices on the FX thread. */
-    void fetchChoices(Map p, Map request, int number, Map app, String appName) {
-        List options = null
-        String why = null
-        def tmp = Files.createTempDirectory("lcqchoices_").toFile()
-        try {
-            request["_job_dir"] = tmp.absolutePath
-            ensureWorker(app, appName)
-            def outcome = worker.run(p.choices_from.tool as String, request, null)
-            if (outcome.responseType == "COMPLETION") {
-                def found = (outcome.outputs?.results ?: []).find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
-                options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
-                if (options == null) why = "the source tool '" + p.choices_from.tool + "' did not return a list"
-            } else {
-                why = "the source tool '" + p.choices_from.tool + "' did not complete (" + outcome.responseType + ": " + outcome.error + ")"
-            }
-        } catch (Exception e) {
-            // broad on purpose (isolation boundary): whatever the source tool or its worker does, the form is never blocked; the text field remains
-            LcLog.warn("choices of '" + p.name + "' could not be loaded", e)
-            why = e.class.simpleName + ": " + e.message
-        } finally { LcLog.deleteTemp(tmp) }
-        def failure = why
-        Platform.runLater { applyChoices(p.name, number, options, failure) }
-    }
-
-    /** `why` says why there are no options (the text field is used instead); the reason is logged once and, for a failure, shown in the status line. */
-    void applyChoices(String name, int number, List options, String why = null) {
-        if (choiceSeq[name] != number) return                         // a late answer for another question or form
+    /** `why` says why there are no options (the text field is used instead); the reason is logged once and, for a failure, shown in the status line. Called on the FX thread by LcLookups
+     *  only for an answer that is still the current one (SPEC 5.2). */
+    void applyChoices(String name, List options, String why = null) {
         def combo = choiceBoxes[name], field = controls[name]
         if (combo == null) return
+        (field as TextField).tooltip = null
         if (!options) {
             combo.visible = false; combo.managed = false; field.visible = true; field.managed = true
             boolean first = LcLog.once("choices:" + currentTool?.id + ":" + name + ":" + (why == null ? "empty" : why.startsWith("waiting") ? "waiting" : "failed"), "'" + name + "' stays a text field" + (why ? ": " + why : " (the source tool listed nothing)"))
@@ -2069,16 +2092,6 @@ class LcDialog {
         progress.progress = 0
     }
 
-    /** The worker is started (or replaced) when there is none for this app, or it has died. */
-    void ensureWorker(Map app, String appName) {
-        idleTimer.stop()
-        if (worker == null || workerApp != appName || worker.closed || !worker.proc.isAlive()) {
-            stopWorker(false)
-            worker = new LcWorker(app.entry)
-            workerApp = appName
-        }
-    }
-
     /** Copies what the thread needs (the form may change meanwhile), runs on a thread, shows the outcome on the FX thread. */
     void runInBackground(Map values) {
         LcRun run = runSnapshot
@@ -2100,13 +2113,18 @@ class LcDialog {
         Map outcome
         Map inputs = null
         File recordDir = null
+        LcLease lease = null
+        LcWorker used = null
         def t0 = System.nanoTime()
         def tmp = Files.createTempDirectory("lcqupath_").toFile()
         try {
             inputs = prepareInputs(values, toolInputs, tmp, appName, toolId)
             recordDir = LcRuns.begin(appName, toolId)      // the record folder exists from the start of the run, owner marker first (SPEC 3.2)
-            ensureWorker(app, appName)
-            outcome = worker.run(toolId, inputs) { message, current, maximum ->
+            idleTimer.stop()
+            lease = workers.lease(appName, app, LcWorkers.RUN)      // this run uses this worker to its end, whatever the form does meanwhile (SPEC 5.5)
+            runLease = lease
+            used = lease.worker as LcWorker
+            outcome = used.run(toolId, inputs) { message, current, maximum ->
                 Platform.runLater {
                     status.text = message
                     progress.progress = (current != null && maximum) ? (current as double) / (maximum as double) : ProgressBar.INDETERMINATE_PROGRESS
@@ -2120,12 +2138,19 @@ class LcDialog {
             LcLog.warn("run of '" + toolId + "' failed on the host", e)
             outcome = [responseType: "FAILURE", error: e.class.simpleName + ": " + e.message, code: "host_error", trace: LcLog.trace(e)]
         } finally {
+            if (lease != null) {
+                if (outcome?.responseType == "CRASH") workers.discard(lease.worker)      // a worker that died or was ended is never reused
+                workers.release(lease)
+            }
+            runLease = null
             LcLog.deleteTemp(tmp)
         }
+        if (outcome == null) outcome = [responseType: "FAILURE", error: "the run ended without an answer", code: "host_error"]
+        outcome.workerOutput = used?.stderrText() ?: ""
         if (inputs != null && outcome.code != LcConst.REFUSAL_CODE) {      // a refusal never reached the worker: no record
             LcRun run = runSnapshot
             Map<String, String> ended = LcRuns.finish(recordDir, new File(inputs["_job_dir"] as String), [entry: app.entry, app: appName, tool: toolId, inputs: inputs, outcome: outcome, seconds: (System.nanoTime() - t0) / 1e9,
-                                                                                                          stderr: worker?.stderrText(), runId: run?.runId, startedUtc: run?.startedUtc])
+                                                                                                          stderr: outcome.workerOutput, runId: run?.runId, startedUtc: run?.startedUtc])
             if (ended.problem) outcome.recordProblem = ended.problem
             else LcRetention.startPrune(app.entry as Map)      // after the done markers: the Tools CLI removes what is past the quota, this script never does (SPEC 3.1)
         }
@@ -2389,7 +2414,7 @@ class LcDialog {
     /** Cancel pressed: ask the worker to stop the run. */
     void cancel() {
         status.text = "cancelling..."
-        worker?.cancel()
+        (runLease?.worker as LcWorker)?.cancel()
     }
 
     // ---- results
@@ -2397,21 +2422,20 @@ class LcDialog {
     void finish(String appName, String toolLabel, Map outcome, double seconds) {
         showIdle()
         def type = outcome.responseType
-        lastReport = LcJson.pretty(outcome) + "\n\nworker output:\n" + (worker?.stderrText() ?: "")
+        lastReport = LcJson.pretty(outcome.findAll { k, v -> k != "workerOutput" }) + "\n\nworker output:\n" + (outcome.workerOutput ?: "")
         if (type == "COMPLETION") {
             finishCompleted(appName, toolLabel, outcome, seconds)
         } else if (type == "CANCELATION") {
             status.text = outcome.workerStopped ? "cancelled (worker stopped)" : "cancelled"      // the Napari wording when the tool ignored Cancel and the worker was ended
         } else if (type == "CRASH") {
-            status.text = "the worker stopped: " + outcome.error
-            stopWorker(true)
+            status.text = "the worker stopped: " + outcome.error      // runOnWorker already ended that worker (workers.discard)
         } else {
             finishFailed(toolLabel, outcome)
         }
         if (outcome.recordProblem) status.text = status.text + "  (" + outcome.recordProblem + ")"      // a record that could not be written is said, never dropped
         runSnapshot?.active = false
         if (!keepWorker.selected) stopWorker(false)
-        else if (worker != null) { idleTimer.duration = Duration.seconds(idleSeconds); idleTimer.playFromStart() }      // the clock of an unused worker starts when its run ends
+        else if (workers.current != null) { idleTimer.duration = Duration.seconds(idleSeconds); idleTimer.playFromStart() }      // the clock of an unused worker starts when its run ends
     }
 
     /** The idle timer ran out: the kept worker (a torch worker holds gigabytes) is closed; the next run starts a new one. */
@@ -2453,12 +2477,10 @@ class LcDialog {
     }
 
     // ---- worker lifetime and the Details window
-    /** Releases the worker: killed at once when `force`, else closed on a background thread. */
+    /** Releases the kept worker: killed at once when `force`, else closed on a background thread, and only when no job holds it (a run in progress is not cut off by the idle timer or by a
+     *  rescan; the person's "Restart worker" forces it). */
     void stopWorker(boolean force) {
-        def w = worker
-        worker = null
-        if (w == null) return
-        if (force) w.kill() else Thread.start { w.close() }
+        workers.reap(force)
     }
 
     /** The last run's outcome and the worker's output in a read-only window. */

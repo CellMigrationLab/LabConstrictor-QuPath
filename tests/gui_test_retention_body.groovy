@@ -237,13 +237,20 @@ def readText = { File f -> f.isFile() ? f.getText("UTF-8") : "<missing " + f.pat
         def callers = sources.collectMany { name, lines -> lines.findAll { it.contains("deleteTemp(") && !it.contains("static void deleteTemp") }.collect { it.trim() } }
         expect("the_only_caller_of_it_passes_the_temporary_export_folder", callers.size() >= 1 && callers.every { it.contains("deleteTemp(tmp)") }, callers)
 
-        // ---- Tools too old: the run is refused with the sentence, no folder is made and nothing starts
+        // ---- Tools too old: such an app is not offered when the registry is read (the status says why); a run of an app that got through anyway is refused with the same sentence (the last line of
+        // defence: an app registered after the window opened), no folder is made and nothing starts
         installApp("runs_old") { Map schema -> schema.tools_version = "0.2.0rc1"; schema.features = ["reserved_inputs_v1", "retention_prune"] }
         installApp("runs_nofeature") { Map schema -> schema.features = ["reserved_inputs_v1"] }
         installApp("runs_unknown") { Map schema -> schema.remove("tools_version"); schema.remove("features") }
         fx { dlg.rescan() }
+        def listed = status(dlg)      // "Found 1 app(s); skipped: runs_nofeature: ...; runs_old: ...; runs_unknown: ..."
         def count = [names(resultsRoot).size(), names(runsRoot).size()]
         for (def pair : [["runs_old", "0.2.0rc1 is older than the 0.3.0a1 this host needs: update it"], ["runs_nofeature", "lacks retention_prune: update it"], ["runs_unknown", "it lists no features"]]) {
+            expect("compat_" + pair[0] + "_is_not_offered_and_the_status_says_why", listed.contains("skipped:") && listed.contains(pair[0] + ": this app's labconstrictor-tools") && listed.contains(pair[1] as String) && !fx { dlg.apps.containsKey(pair[0]) }, listed)
+            fx {      // an app that is already in the window's list (registered after the registry was read, or listed by an older version): its run is refused
+                dlg.apps[pair[0]] = [entry: LcJson.parse(new File(apps, pair[0] + ".json")), schema: LcJson.parse(new File(apps, pair[0] + ".schema.json"))]
+                dlg.appBox.items.add(pair[0]); null
+            }
             pick(dlg, pair[0], "Quick values")
             fx { dlg.run() }
             Thread.sleep(500)
