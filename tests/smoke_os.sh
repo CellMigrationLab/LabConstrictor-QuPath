@@ -45,12 +45,14 @@ LC_SMOKE_APP=interactions run_qupath smoke_jar "$HERE/smoke_jar.groovy" "$SHARED
 verdict smoke_jar '^SMOKE OK'
 if grep -q 'no gui' "$summary"; then echo "QuPath did not run the script: the other steps are skipped"; echo "| (other steps) | skipped: QuPath did not run the script |" >> "$summary"; [ -z "${GITHUB_STEP_SUMMARY:-}" ] || cat "$summary" >> "$GITHUB_STEP_SUMMARY"; exit 1; fi
 # 2. OS-specific code paths: each body is appended to the joined script (what tests/run_gui_test.sh does)
-declare -A scratch=([gui_test_parity_trust_body.groovy]=lhome_trust [gui_test_parity_lifecycle_body.groovy]=lhome_life [gui_test_retention_body.groovy]=lhome_retention)
+# bodies that write their own registry get a scratch LC_HOME with the name they assert (no associative array: macOS has bash 3.2)
+scratch_for() { case "$1" in gui_test_parity_trust_body.groovy) echo lhome_trust;; gui_test_parity_lifecycle_body.groovy) echo lhome_life;; gui_test_retention_body.groovy) echo lhome_retention;; esac; }
 for body in gui_test_parity_quote_body.groovy gui_test_parity_trust_body.groovy gui_test_parity_lifecycle_body.groovy gui_test_retention_body.groovy; do
   name="${body%.groovy}"; joined="$LOGS/$name.joined.groovy"
   { while IFS= read -r part || [ -n "$part" ]; do part="${part%$'\r'}"; [ -z "$part" ] || { cat "$RES/$part"; echo; }; done < "$RES/parts.txt"; cat "$HERE/$body"; } > "$joined"
   home="$SHARED"
-  if [ -n "${scratch[$body]:-}" ]; then home="$LOGS/scratch/${scratch[$body]}"; mkdir -p "$home"; fi
+  scr="$(scratch_for "$body")"
+  if [ -n "$scr" ]; then home="$LOGS/scratch/$scr"; mkdir -p "$home"; fi
   LC_SHARED_HOME="$(native "$SHARED")" run_qupath "$name" "$joined" "$(native "$home")" -Dlc.noshow=true
   verdict "$name" '^(RESULTS|SUMMARY) '
 done
