@@ -2,8 +2,10 @@ name: release
 # One-click install: when a release is published, this builds labconstrictor-qupath-<tag>.jar with build.sh (Java 25, against the pinned QuPath),
 # runs a smoke test on that exact jar in a real QuPath on a virtual screen (the menu entry exists, the dialog opens), and attaches the jar,
 # LabConstrictorTools-all.groovy and SHA256SUMS to the release; the QuPath version and the minimum Tools version are appended to the notes.
-# Manually (workflow_dispatch, input "tag") it is a dry run: build, smoke test, files kept as workflow artifacts, nothing is published.
+# Manually (workflow_dispatch, input "tag") or on a pull request that changes this machinery it is a dry run: build, smoke test, files kept as workflow artifacts, nothing is published.
 on:
+  pull_request:       # a dry run when the release machinery itself changes (never publishes)
+    paths: [".github/workflows/release.yml", "build.sh", "tests/smoke_jar.*"]
   release:
     types: [published]
   workflow_dispatch:
@@ -18,7 +20,7 @@ env:
   # QuPath is pinned by version and checksum (same pin as qupath-gui.yml); the download is cached per QUPATH_VERSION.
   QUPATH_VERSION: "0.7.0"
   QUPATH_SHA256: 165e27a0731d58ba039e9d0d34a54acf896bb92e81922370df295cb85418ce53
-  TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+  TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag || 'v0.0.0-dryrun' }}
 jobs:
   build:
     runs-on: ubuntu-latest
