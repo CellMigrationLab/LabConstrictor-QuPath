@@ -63,7 +63,7 @@ Thread.start("lc-gui-test") {
         home.deleteDir(); def apps = new File(home, "apps"); apps.mkdirs()
         def P = { String name, String type, Map more = [:] -> [name: name, label: name.capitalize().replace("_", " "), type: type, required: more.required != false && !more.nullable] + more }
         def writeApp = { String app, List tools, String file = app ->      // `file`: the name of the registry file, which need not be the app's name
-            new File(apps, file + ".schema.json").text = LcJson.toJson([protocol: 1, tools: tools])
+            new File(apps, file + ".schema.json").text = LcJson.toJson([protocol: 1, tools_version: "0.3.0a1", features: ["reserved_inputs_v1", "retention_prune"], tools: tools])
             new File(apps, file + ".json").text = LcJson.toJson([schema: 1, name: app, display_name: app, version: "", prefix: INTERACTIONS.prefix, python: PY,
                     module: "labconstrictor_tools.examples.interactions", pythonpath: [], runtime_path: "", schema_path: new File(apps, file + ".schema.json").path])
             ["chmod", "644", new File(apps, file + ".json").path, new File(apps, file + ".schema.json").path].execute().waitFor()
