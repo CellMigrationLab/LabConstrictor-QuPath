@@ -155,7 +155,9 @@ jobs:
         run: Expand-Archive -Path "qupath-download/${{ matrix.asset }}" -DestinationPath qupath-dist
       - name: Install QuPath (macOS)
         if: runner.os == 'macOS'
-        run: sudo installer -pkg "qupath-download/${{ matrix.asset }}" -target /
+        run: |
+          sudo installer -pkg "qupath-download/${{ matrix.asset }}" -target /
+          sudo chown -R "$(id -un)" /Applications/QuPath*.app   # the smoke puts the jar on the app's class path
       - name: Register the small apps (scratch LC_HOME, this OS's Python)
         shell: bash
         run: PYTHON=python tests/ci_setup_os.sh "$RUNNER_TEMP/lc" main

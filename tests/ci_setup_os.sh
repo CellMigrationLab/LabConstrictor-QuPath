@@ -13,7 +13,7 @@ export LC_HOME="$WORKN/home"; mkdir -p "$WORK/home"
 if [ -x "$WORK/tools_env/Scripts/python.exe" ]; then PY="$WORK/tools_env/Scripts/python.exe"; else PY="$WORK/tools_env/bin/python"; fi
 echo "interpreter of the app environment: $PY"
 "$PY" -m pip install -q --upgrade pip
-"$PY" -m pip install -q "git+https://github.com/CellMigrationLab/LabConstrictor-Tools@$REF" numpy pandas tifffile scipy
+"$PY" -m pip install -q "git+https://github.com/CellMigrationLab/LabConstrictor-Tools@$REF" numpy pandas tifffile scipy scikit-image
 "$PY" -m labconstrictor_tools register --name interactions --prefix "$WORKN/tools_env" --module labconstrictor_tools.examples.interactions
 "$PY" -m labconstrictor_tools register --name runs --prefix "$WORKN/tools_env" --module runs_lc_tools --pythonpath "$REPON/tests/runs_app"
 "$PY" -m labconstrictor_tools list
