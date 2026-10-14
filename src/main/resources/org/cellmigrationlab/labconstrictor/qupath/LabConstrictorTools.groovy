@@ -806,6 +806,8 @@ class LcRegistry {
             return [problem: entry.name + ": not available on this machine (interpreter " + entry.python + " is missing)", name: entry.name]
         def reason = untrustedReason(file, entry as Map, userDir)
         if (reason) return [problem: entry.name + ": ignored: " + reason, name: entry.name]
+        Map<String, Object> hosts = LcAppHosts.decide(entry as Map)      // the per-host discovery rule: the skip sentence is the whole problem text (it names the app itself)
+        if (!hosts.listed) return [problem: hosts.sentence, name: entry.name]
         def schema = LcJson.parse(new File(entry.schema_path as String))
         def badSchema = schemaProblem(schema)
         if (badSchema) return [problem: file.name + ": " + badSchema]

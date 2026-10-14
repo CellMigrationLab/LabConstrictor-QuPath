@@ -239,8 +239,8 @@ def readText = { File f -> f.isFile() ? f.getText("UTF-8") : "<missing " + f.pat
 
         // ---- Tools too old: such an app is not offered when the registry is read (the status says why); a run of an app that got through anyway is refused with the same sentence (the last line of
         // defence: an app registered after the window opened), no folder is made and nothing starts
-        installApp("runs_old") { Map schema -> schema.tools_version = "0.2.0rc1"; schema.features = ["reserved_inputs_v1", "retention_prune"] }
-        installApp("runs_nofeature") { Map schema -> schema.features = ["reserved_inputs_v1"] }
+        installApp("runs_old") { Map schema -> schema.tools_version = "0.2.0rc1"; schema.features = ["app_hosts_v1", "reserved_inputs_v1", "retention_prune"] }
+        installApp("runs_nofeature") { Map schema -> schema.features = ["app_hosts_v1", "reserved_inputs_v1"] }
         installApp("runs_unknown") { Map schema -> schema.remove("tools_version"); schema.remove("features") }
         fx { dlg.rescan() }
         def listed = status(dlg)      // "Found 1 app(s); skipped: runs_nofeature: ...; runs_old: ...; runs_unknown: ..."

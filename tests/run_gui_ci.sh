@@ -5,6 +5,8 @@
 # A body FAILS when QuPath exits non-zero, a line "FAIL ..." is printed, the body never printed its RESULTS/SUMMARY line (a crash or a
 # hang past the timeout), or it printed no PASS at all. A body is SKIPPED, with the reason printed, only when an app it needs is not
 # registered in $LC_HOME and is listed in needs_optional_apps below; a missing app for any other body is a failure.
+# The sandbox driver gui_test_listing_body.groovy is not part of the default run (it needs LC_EXPECT_* variables, tests/run_listing_matrix.sh gives them); named on the command line it
+# PASSES only when it exits 0 and prints exactly one `CHECK qupath_lists_the_app PASS ...` or `CHECK qupath_does_not_list_the_app PASS ...` line (the contract of the release sandbox).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 LOGS="${LOGS:-$PWD/gui-logs}"; mkdir -p "$LOGS"
@@ -27,17 +29,18 @@ declare -A needs=(
 for b in area buttons channel copy fallbacks interactions region shapes widgets; do needs[gui_test_${b}_body.groovy]="interactions"; done
 for b in parity_form parity_host parity_lifecycle parity_messages parity_pixel parity_results parity_support parity_quote; do needs[gui_test_${b}_body.groovy]="interactions"; done
 needs[gui_test_parity_cancel_body.groovy]="LabConstrictorPlayground interactions"
+needs[gui_test_app_hosts_body.groovy]="interactions"
 # bodies that write their own registry and results (they empty LC_HOME first, so each gets a scratch LC_HOME named as the body asserts; the registered apps stay in LC_SHARED_HOME)
 declare -A scratch=([gui_test_parity_trust_body.groovy]=lhome_trust [gui_test_parity_form_body.groovy]=lhome_form [gui_test_parity_host_body.groovy]=lhome_host
   [gui_test_parity_lifecycle_body.groovy]=lhome_life [gui_test_parity_pixel_body.groovy]=lhome_pixel [gui_test_parity_support_body.groovy]=lhome_support
   [gui_test_retention_body.groovy]=lhome_retention [gui_test_identity_body.groovy]=lhome_identity
-  [gui_test_numbers_body.groovy]=lhome_numbers [gui_test_async_body.groovy]=lhome_async)
+  [gui_test_numbers_body.groovy]=lhome_numbers [gui_test_async_body.groovy]=lhome_async [gui_test_app_hosts_body.groovy]=lhome_hosts)
 SHARED_HOME="$LC_HOME"; export LC_SHARED_HOME="$SHARED_HOME"
 # bodies that are skipped (not failed) while their apps are not registered: the bridge of these two apps is not on their main branch yet
 optional="gui_test_body.groovy"
 skip_reason="CellTracksColab and NucleiSky have no labconstrictor_tools bridge (celltracks_lc_tools / nucleisky_lc_tools) on their main branch yet, so they cannot be installed from a release or main; register them in LC_HOME to run this body"
 
-if [ $# -gt 0 ]; then bodies=("$@"); else bodies=($(cd tests && ls gui_test_*body.groovy)); fi
+if [ $# -gt 0 ]; then bodies=("$@"); else bodies=($(cd tests && ls gui_test_*body.groovy | grep -v '^gui_test_listing_body.groovy$')); fi
 fail=0; rows=()
 for body in "${bodies[@]}"; do
   body=$(basename "$body"); name=${body%.groovy}; log="$LOGS/$name.log"
@@ -53,6 +56,13 @@ for body in "${bodies[@]}"; do
   export LC_HOME="$SHARED_HOME"
   if [ -n "${scratch[$body]:-}" ]; then export LC_HOME="$LOGS/scratch/${scratch[$body]}"; mkdir -p "$LC_HOME"; fi
   BODY="$body" OUT="$LOGS/shots/$name" timeout --kill-after=30 "$TIMEOUT" tests/run_gui_test.sh > "$log" 2>&1; code=$?
+  if [ "$body" = gui_test_listing_body.groovy ]; then      # the sandbox driver: one CHECK line is the whole result
+    grep -E '^(CHECK|NOTE) ' "$log" | cut -c1-400
+    lines=$(grep -c '^CHECK ' "$log"); passed=$(grep -c '^CHECK [a-z_]* PASS ' "$log")
+    if [ "$code" -eq 0 ] && [ "$lines" -eq 1 ] && [ "$passed" -eq 1 ]; then echo "OK $body"; rows+=("| $body | passed | 1 CHECK line |")
+    else echo "FAILED $body: exit code $code, $lines CHECK line(s), $passed passed"; rows+=("| $body | FAILED | exit code $code, $lines CHECK line(s), $passed passed |"); fail=1; fi
+    continue
+  fi
   pass=$(grep -c '^PASS ' "$log"); nfail=$(grep -c '^FAIL ' "$log")
   grep -E '^(PASS|FAIL|RESULTS|SUMMARY)' "$log" | cut -c1-300
   why=""

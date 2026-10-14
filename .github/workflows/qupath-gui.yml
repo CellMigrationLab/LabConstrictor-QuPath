@@ -56,6 +56,10 @@ jobs:
           LC_HOME: ${{ runner.temp }}/lc/home
           LOGS: ${{ github.workspace }}/gui-logs
         run: tests/run_gui_ci.sh
+      - name: Which apps QuPath lists (the app matrix, the sandbox driver tests/gui_test_listing_body.groovy)
+        env:
+          LOGS: ${{ github.workspace }}/gui-logs
+        run: tests/run_listing_matrix.sh "${{ runner.temp }}/lc"
       - name: Upload logs and screenshots
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -64,5 +68,6 @@ jobs:
           path: |
             gui-logs
             ${{ runner.temp }}/lc/home/logs
+            ${{ runner.temp }}/lc/matrix_home/logs
           if-no-files-found: ignore
           retention-days: 14
