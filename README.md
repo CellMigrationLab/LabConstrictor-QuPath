@@ -1,16 +1,19 @@
 # LabConstrictor-QuPath (prototype)
 
-Runs the tools of every installed LabConstrictor app (NucleiSky, CellTracksColab, ...) from **Extensions > LabConstrictor tools...** in
+Runs the tools of every installed LabConstrictor app (apps meant for QuPath: Playground, NucleiSky, Guess the Condition) from **Extensions > LabConstrictor tools...** in
 QuPath 0.7. The form is generated from the tool's declared schema ([LabConstrictor-Tools](https://github.com/CellMigrationLab/LabConstrictor-Tools),
 `docs/PROTOCOL.md`); the tool runs in the app's own Python environment through the LabConstrictor worker (JSON lines on stdin/stdout),
 so QuPath never imports the app's packages and needs no Python of its own. Same idea as the Napari and Fiji front-ends.
 
 ## Install
-1. Install a LabConstrictor app (NucleiSky, CellTracksColab, ...): its installer registers the app and its tools (check with `labconstrictor-tools list`).
+1. Install a LabConstrictor app (for example Playground, NucleiSky or Guess the Condition): its installer registers the app and its tools (check with `labconstrictor-tools list`).
 2. Download `labconstrictor-qupath-<tag>.jar` from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases), drag it onto the QuPath window (or copy it into the extensions folder shown in QuPath's Preferences) and restart QuPath.
 3. Open **Extensions > LabConstrictor tools...**
 
-For scripters, a second way that needs no jar: download `LabConstrictorTools-all.groovy` from the same release (the whole script in one file), open it in QuPath's Script Editor and run it.
+For scripters, a second way that needs no jar: download the **single file** `LabConstrictorTools-all.groovy` from the same release (the whole script in one file), open it in QuPath's Script Editor and run it. This all-in-one file is what the Script Editor needs: the script in the repository is split into the part files listed in `parts.txt`, and those do not run on their own in the Script Editor (the jar joins them itself).
+
+Install page for the apps and all three hosts: [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md). Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`); the rule is a binding rule in Tools 0.3.0a1 (feature `app_hosts_v1`; PROTOCOL.md section App hosts); Napari honours it (PR #61 merged); Fiji and QuPath honour it once their PRs (#47, #35) merge; installers pass the hosts from template 0.1.18 (template PR #33, not merged). Intended for QuPath: Playground, NucleiSky and Guess the Condition. **VLab4Mic is not listed in QuPath** (it is for Napari and Fiji), and CellTracksColab is not listed in any host. Testing: the [human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) and its [record sheet](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md#0-record-sheet-the-test-set-fill-in-before-you-start).
+
 Every release lists the QuPath version it was built against and the minimum Tools version in its notes; `SHA256SUMS` holds the checksums of the files.
 
 **QuPath versions and systems.** Built against QuPath **0.7.0**; QuPath 0.7 is built with Java 25 and the jar needs it, so older QuPath versions are not supported, and other 0.7.x versions are not tested.
