@@ -15,9 +15,7 @@ env:
   QUPATH_VERSION: "0.7.0"
   QUPATH_SHA256: 165e27a0731d58ba039e9d0d34a54acf896bb92e81922370df295cb85418ce53
   # The Tools package comes from its main branch for now; a tag pin comes later (set TOOLS_REF to the tag, e.g. v1.0.0).
-  # TEMPORARY (the one place): this PR needs the per-host discovery rule (feature app_hosts_v1) of LabConstrictor-Tools PR #133, which is not merged yet.
-  # Switch it back to `main` (or the tag) when #133 is merged, BEFORE this PR is merged.
-  TOOLS_REF: claude/app-hosts-discovery
+  TOOLS_REF: main
 jobs:
   qupath-gui:
     runs-on: ubuntu-latest
