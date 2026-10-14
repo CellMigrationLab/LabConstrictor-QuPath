@@ -1,6 +1,6 @@
 # LabConstrictor-QuPath (prototype)
 
-Runs the tools of every installed LabConstrictor app that lists QuPath as a host (for example Playground, NucleiSky, Guess the Condition) from **Extensions > LabConstrictor tools...** in
+Runs the tools of every installed LabConstrictor app (apps meant for QuPath: Playground, NucleiSky, Guess the Condition) from **Extensions > LabConstrictor tools...** in
 QuPath 0.7. The form is generated from the tool's declared schema ([LabConstrictor-Tools](https://github.com/CellMigrationLab/LabConstrictor-Tools),
 `docs/PROTOCOL.md`); the tool runs in the app's own Python environment through the LabConstrictor worker (JSON lines on stdin/stdout),
 so QuPath never imports the app's packages and needs no Python of its own. Same idea as the Napari and Fiji front-ends.
