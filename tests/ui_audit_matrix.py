@@ -6,7 +6,7 @@ The audit runs one QuPath launch per phase (see tests/run_ui_audit.sh). This scr
     multi     the expected ids and an empty matrix of the multi-app check (LC_APPS)
     plan      read the app's schema from the Tools CLI (an independent source: the app's own interpreter, `labconstrictor_tools list --json`) and its lc_tests, write
               <shots>/plan_qupath_<app>.json (tools, the case chosen per tool, the cases to replay first) and <shots>/expected_qupath_<app>.json (every id the audit must produce)
-    init      write an empty <shots>/matrix_ui_qupath_<app>.json (the Groovy launches append to it)
+    expect    (negative controls) is a row of the matrix FAIL with this text? exit 1 when the seeded failure was not caught
     killed    a QuPath launch was killed by the watchdog: every expected id of that phase that has no row yet gets a FAIL row
     finish    the controls check from the side files of the launches, NOT_RUN rows for every expected id without a row, the summary; exit status 1 on any FAIL or NOT_RUN
 
@@ -73,9 +73,9 @@ def matrix_path(shots: Path, app: str) -> Path:
     return shots / ("matrix_%s_%s_%s.json" % (FAMILY, HOST, app))
 
 
-def new_matrix(app: str, expected: int) -> dict[str, Any]:
+def new_matrix(app: str, expected: int, host_version: str) -> dict[str, Any]:
     """An empty matrix document."""
-    return {"host": HOST, "app": app, "family": FAMILY, "started": now(), "finished": None, "expected": expected, "rows": []}
+    return {"host": HOST, "app": app, "family": FAMILY, "host_version": host_version, "started": now(), "finished": None, "expected": expected, "rows": []}
 
 
 def read_expected(shots: Path, app: str) -> dict[str, str]:
@@ -86,7 +86,8 @@ def read_expected(shots: Path, app: str) -> dict[str, str]:
 
 def load_matrix(shots: Path, app: str) -> dict[str, Any]:
     """The matrix of the app (it must exist: `init` made it)."""
-    return read_json(matrix_path(shots, app))
+    matrix: dict[str, Any] = read_json(matrix_path(shots, app))
+    return matrix
 
 
 def add_row(shots: Path, app: str, row_id: str, status: str, detail: str, tool: str = "", control: str = "", seconds: float = 0.0) -> None:
@@ -185,7 +186,7 @@ def command_plan(args: argparse.Namespace) -> int:
         ids = expected_ids(plan)
     write_json_atomic(shots / ("plan_qupath_%s.json" % args.app), plan)
     write_json_atomic(shots / ("expected_qupath_%s.json" % args.app), {"host": HOST, "app": args.app, "family": FAMILY, "expected": list(ids), "phases": ids})
-    write_json_atomic(matrix_path(shots, args.app), new_matrix(args.app, len(ids)))
+    write_json_atomic(matrix_path(shots, args.app), new_matrix(args.app, len(ids), args.host_version))
     print("plan %s: %d tool(s), %d expected id(s); tools: %s" % (args.app, len(plan["tools"]), len(ids), " ".join(t["id"] for t in plan["tools"])))
     return 0
 
@@ -197,7 +198,7 @@ def command_multi(args: argparse.Namespace) -> int:
     ids = {"ui_qupath_multi_lists_%s" % sanitize(a): "multi" for a in names}
     ids.update({"ui_qupath_multi_switch_%s_%s" % (sanitize(a), sanitize(b)): "multi" for a in names for b in names if a != b})
     write_json_atomic(shots / "expected_qupath_multi.json", {"host": HOST, "app": "multi", "family": FAMILY, "expected": list(ids), "phases": ids})
-    write_json_atomic(matrix_path(shots, "multi"), new_matrix("multi", len(ids)))
+    write_json_atomic(matrix_path(shots, "multi"), new_matrix("multi", len(ids), args.host_version))
     print("multi: %d expected id(s) for %s" % (len(ids), ", ".join(names)))
     return 0
 
@@ -269,11 +270,22 @@ def command_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_expect(args: argparse.Namespace) -> int:
+    """`expect`: a NEGATIVE CONTROL asks whether the row `--id` has status `--status` and a detail that contains `--contains`: prints NEGATIVE ... OK|MISSED, exit 1 on MISSED."""
+    rows = [r for r in load_matrix(Path(args.shots), args.app)["rows"] if r["id"] == args.id]
+    hit = [r for r in rows if r["status"] == args.status and args.contains in r["detail"]]
+    if hit:
+        print("NEGATIVE %s OK: %s went %s: %s" % (args.label, args.id, args.status, hit[0]["detail"][:200]))
+        return 0
+    print("NEGATIVE %s MISSED: %s has %s, wanted %s containing %r" % (args.label, args.id, [(r["status"], r["detail"][:120]) for r in rows] or "no row", args.status, args.contains))
+    return 1
+
+
 def main(argv: list[str]) -> int:
     """Command line entry."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name, fn in (("plan", command_plan), ("multi", command_multi), ("tools", command_tools), ("killed", command_killed), ("finish", command_finish), ("add", command_add)):
+    for name, fn in (("plan", command_plan), ("multi", command_multi), ("tools", command_tools), ("killed", command_killed), ("finish", command_finish), ("add", command_add), ("expect", command_expect)):
         p = sub.add_parser(name)
         p.add_argument("--app", required=True)
         p.add_argument("--shots", required=True)
@@ -283,14 +295,21 @@ def main(argv: list[str]) -> int:
             p.add_argument("--tests", default="")
             p.add_argument("--expect", choices=["listed", "not_listed"], default="listed")
             p.add_argument("--ordered", default="GuessTheCondition")
+            p.add_argument("--host-version", default="unknown")
         if name == "multi":
             p.add_argument("--apps", required=True)
+            p.add_argument("--host-version", default="unknown")
         if name == "killed":
             p.add_argument("--phase", required=True)
             p.add_argument("--seconds", required=True)
             p.add_argument("--reason", default="timeout")
         if name == "finish":
             p.add_argument("--expect", choices=["listed", "not_listed", "multi"], default="listed")
+        if name == "expect":
+            p.add_argument("--id", required=True)
+            p.add_argument("--status", choices=list(STATUSES), required=True)
+            p.add_argument("--contains", default="")
+            p.add_argument("--label", required=True)
         if name == "add":
             p.add_argument("--id", required=True)
             p.add_argument("--status", choices=list(STATUSES), required=True)

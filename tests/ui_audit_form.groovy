@@ -171,7 +171,7 @@ void uaActivatePixelSize(Object dlg, Map p, List<String> done) {
     String of = p.pixel_size_of
     File fixture = new File(UiAudit.testsDir, "fixtures/asym.tif").isFile() ? new File(UiAudit.testsDir, "fixtures/asym.tif") : new File(UiAudit.testsDir, "fixtures/blobs.tif")
     if (fixture.isFile() && dlg.imageBoxes[of] != null) {      // what the field shows for a file must be what the file's own TIFF tags say (read by javax.imageio, not by the host)
-        UiAudit.fx { def box = dlg.imageBoxes[of]; uaFileChoice(box); dlg.fileFields[of].text = fixture.absolutePath; uaFileChoice(box); dlg.fileFields[of].text = fixture.absolutePath; null }
+        uaTypeFile((ComboBox) dlg.imageBoxes[of], (TextField) dlg.fileFields[of], fixture.absolutePath)
         Thread.sleep(1200)
         Double oracle = (Double) uaImageIoInfo(fixture.absolutePath).pixelSizeUm
         String shown = ((String) UiAudit.fx { field.text }).trim()
@@ -208,7 +208,7 @@ void uaActivateImage(Object dlg, Map p, List<String> notes) {
     }
     String fixture = new File(UiAudit.testsDir, "fixtures/blobs.tif").absolutePath
     File multi = new File(UiAudit.testsDir, "fixtures/three_channels.tif")
-    UiAudit.fx { uaFileChoice(box); file.text = (p.pick_channel && multi.isFile() ? multi.absolutePath : fixture); uaFileChoice(box); null }
+    uaTypeFile(box, file, (p.pick_channel && multi.isFile() ? multi.absolutePath : fixture))
     Map read = (Map) uaGet(dlg, name)
     uaAssert(read != null && read.file == (p.pick_channel && multi.isFile() ? multi.absolutePath : fixture), "the file typed for '" + name + "' reads back " + read)
     uaAssert(UiAudit.fx { area.disable } == true, "the Image area chooser is enabled for a file")
@@ -248,7 +248,7 @@ void uaCheckEnabledWhen(Object dlg, Map tool) {
 void uaFormControls(Object dlg, String app, String toolChoice, Map tool, UaMatrix matrix) {
     String id = UiAudit.sanitize(tool.id as String)
     List<String> notes = []
-    boolean ok = uaCheck("ui_qupath_form_" + id + "_controls", tool.id as String, "form", UiAudit.toolTimeout, {
+    uaCheck("ui_qupath_form_" + id + "_controls", tool.id as String, "form", UiAudit.toolTimeout, {
         uaPick(dlg, app, toolChoice)
         UiAudit.fx { dlg.onTool(); null }      // a fresh form
         Thread.sleep(300)

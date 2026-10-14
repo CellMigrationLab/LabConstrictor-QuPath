@@ -11,6 +11,7 @@
 /** The opening of the window and what every phase does first. */
 Object uaStart(UaMatrix matrix) {
     Object dlg = uaOpenDialog()
+    if (!(UiAudit.phase in ["multi", "not_listed"])) { UiAudit.fx { dlg.appBox.value = UiAudit.app; null }; Thread.sleep(500) }      // the window starts on its first app: the audit of this app picks it
     uaSeedAfterOpen(dlg)
     return dlg
 }

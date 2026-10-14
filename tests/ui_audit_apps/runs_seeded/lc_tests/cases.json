@@ -1,0 +1,6 @@
+[
+  {"tool": "quick_values", "inputs": {"n": 3}, "expect": {"results": {"seen": {"n": 3}}}},
+  {"tool": "fails", "comment": "SEEDED: the tool raises an error, the case says COMPLETE: the audit must go red", "expect": {"status": "COMPLETE"}},
+  {"tool": "dies", "comment": "SEEDED: the worker ends at once, the case says COMPLETE: the audit must go red", "expect": {"status": "COMPLETE"}},
+  {"tool": "never_returns", "inputs": {"gate": "/nonexistent/gate_that_never_opens"}, "comment": "SEEDED: a hung tool, ignores Cancel: the watchdog must end it and the audit go red", "expect": {"status": "COMPLETE"}}
+]

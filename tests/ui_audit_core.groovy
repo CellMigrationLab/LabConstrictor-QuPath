@@ -24,6 +24,7 @@ class UaMatrix {
     String started = stamp()
     String finished = null
     int expected = 0
+    String hostVersion = null
     final List<Map> rows = Collections.synchronizedList(new ArrayList<Map>())
     int failed = 0                                                                         // FAIL rows added by this launch
 
@@ -35,6 +36,7 @@ class UaMatrix {
             Map old = (Map) LcJson.parse(file)
             started = old.started ?: started
             expected = (old.expected ?: 0) as int
+            hostVersion = old.host_version
             rows.addAll((List<Map>) old.rows)
         }
         write()
@@ -65,7 +67,7 @@ class UaMatrix {
 
     /** Atomic rewrite: the matrix on disk is always a whole JSON document. */
     synchronized void write() {
-        Map doc = [host: "qupath", app: app, family: "ui", started: started, finished: finished, expected: expected, rows: new ArrayList<Map>(rows)]
+        Map doc = [host: "qupath", app: app, family: "ui", host_version: hostVersion, started: started, finished: finished, expected: expected, rows: new ArrayList<Map>(rows)]
         Path target = file.toPath()
         Path temp = Files.createTempFile(target.parent, "matrix_ui_qupath_", ".tmp")
         Files.write(temp, LcJson.pretty(doc).getBytes("UTF-8"))
@@ -204,6 +206,14 @@ void uaFileChoice(javafx.scene.control.ComboBox box) {
     String other = box.items.find { it != LcDialog.FILE_CHOICE }
     if (other != null) box.value = other
     box.value = LcDialog.FILE_CHOICE
+}
+
+/** Types a file path into the file field of an image chooser the way a person does: "File..." chosen, the text typed, then the focus moves on (the extension reads the file, and fills the channel chooser, when the field loses the focus). Not on the JavaFX thread. */
+void uaTypeFile(javafx.scene.control.ComboBox box, javafx.scene.control.TextField file, String path) {
+    UiAudit.fx { uaFileChoice(box); file.text = path; file.requestFocus(); null }
+    Thread.sleep(400)
+    UiAudit.fx { box.requestFocus(); null }
+    Thread.sleep(600)
 }
 
 /** Scrolls every scroll pane around `node` so that the node is in the middle of its viewport (a real click on a control that is below the fold would hit something else); throws when it still is not inside. */

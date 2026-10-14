@@ -22,6 +22,7 @@ void uaApplyInputs(Object dlg, Map tool, Map inputs) {
     inputs.each { String name, Object value ->
         Map p = (Map) ((List) tool.inputs).find { it.name == name }
         if (p == null) throw new IllegalStateException("the case sets '" + name + "', which tool '" + tool.id + "' does not declare")
+        List typedFile = []      // [chooser, field, path] of an image given as a file: typed after this block, with the focus moving on
         UiAudit.fx {
             if (value == null) return null      // unset: the form default of an optional parameter is already "unset"
             if (dlg.checks[name] != null) dlg.checks[name].selected = true
@@ -32,9 +33,7 @@ void uaApplyInputs(Object dlg, Map tool, Map inputs) {
                     if (!box.items.contains(choice)) throw new IllegalStateException("'" + choice + "' is not offered for '" + name + "' (it offers " + box.items + ")")
                     box.value = choice
                 } else {
-                    uaFileChoice(box)
-                    dlg.fileFields[name].text = path
-                    uaFileChoice(box)      // the channel chooser reads the file when the chooser changes
+                    typedFile.addAll([box, dlg.fileFields[name], path])
                 }
             } else if (p.type in ["file", "table", "folder"]) {
                 dlg.setters[name](uaResolvePath(value.toString()))
@@ -49,6 +48,7 @@ void uaApplyInputs(Object dlg, Map tool, Map inputs) {
             }
             null
         }
+        if (typedFile) uaTypeFile((ComboBox) typedFile[0], (TextField) typedFile[1], (String) typedFile[2])
     }
     Thread.sleep(600)
 }
@@ -253,7 +253,7 @@ void uaRunTool(Object dlg, String app, Map tool, UaMatrix matrix) {
     File dir = new File(UiAudit.shots, "qupath/" + app)
     File formPng = new File(dir, LcDialog.slug(toolId) + "_form.png"), afterPng = new File(dir, LcDialog.slug(toolId) + "_after_run.png"), resultPng = new File(dir, LcDialog.slug(toolId) + "_result.png")
     Map noCase = (Map) UiAudit.plan.no_case
-    Integer index = (Integer) (((Map) UiAudit.plan.chosen)[toolId] as Integer)
+    Integer index = ((Map) UiAudit.plan.chosen)[toolId] as Integer
     if (index == null) {
         String reason = noCase[toolId] != null ? "declared in no_case.json: " + noCase[toolId] : null
         if (reason != null) {
