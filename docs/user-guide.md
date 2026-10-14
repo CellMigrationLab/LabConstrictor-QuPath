@@ -10,7 +10,7 @@ The extension runs the tools of every installed LabConstrictor app from QuPath, 
 ## What you need
 
 - [QuPath](https://qupath.github.io) 0.7.
-- At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the extension finds it. Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`); the rule is a binding rule in Tools 0.3.0a1 (feature `app_hosts_v1`; PROTOCOL.md section App hosts); Napari honours it (PR #61 merged); Fiji and QuPath honour it once their PRs (#47, #35) merge; installers pass the hosts from template 0.1.18 (template PR #33, not merged). Intended for QuPath: Playground, NucleiSky and Guess the Condition. **VLab4Mic is not listed in QuPath** (it is for Napari and Fiji), and CellTracksColab is not listed in any host.
+- At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the extension finds it. Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`); the rule is a binding rule in Tools 0.3.0a1 (feature `app_hosts_v1`; PROTOCOL.md section App hosts); Napari, Fiji and QuPath all honour it (this host since PR #35). Apps without a declaration, i.e. installed with an installer from before template 0.1.18, are listed in every host and the Log says so ("declares no hosts"); installers pass the hosts from template 0.1.18 (template PR #33, not merged yet). Intended for QuPath: Playground, NucleiSky and Guess the Condition. **VLab4Mic is not listed in QuPath** (it is for Napari and Fiji), and CellTracksColab is not listed in any host.
 - Only to build the jar yourself: JDK 25 (QuPath 0.7 is built with Java 25), as described in the repository's README.
 
 ## Install
