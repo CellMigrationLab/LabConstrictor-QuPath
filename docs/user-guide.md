@@ -10,7 +10,7 @@ The extension runs the tools of every installed LabConstrictor app from QuPath, 
 ## What you need
 
 - [QuPath](https://qupath.github.io) 0.7.
-- At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the extension finds it.
+- At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the extension finds it. Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`); the rule that makes QuPath follow this declaration is being added in Tools 0.3.0a1. Intended for QuPath: Playground, NucleiSky and Guess the Condition. **VLab4Mic is not listed in QuPath** (it is for Napari and Fiji), and CellTracksColab is not listed in any host.
 - Only to build the jar yourself: JDK 25 (QuPath 0.7 is built with Java 25), as described in the repository's README.
 
 ## Install
@@ -18,7 +18,9 @@ The extension runs the tools of every installed LabConstrictor app from QuPath, 
 1. Download `labconstrictor-qupath-<tag>.jar` from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases).
 2. Drop the jar onto the QuPath window, or put it in the QuPath extensions folder (shown in QuPath's Preferences), and restart QuPath.
 
-Without the jar: download `LabConstrictorTools-all.groovy` from the same release, open it in QuPath's Script Editor and run it.
+Without the jar: download the **single file** `LabConstrictorTools-all.groovy` from the same release, open it in QuPath's Script Editor and run it. The Script Editor needs this all-in-one file; the script in the repository is split into part files that do not run on their own there.
+
+Full install page for the apps and all three hosts: [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md) (in Tools PR #132; the link works once it is merged). To help test, follow the [human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) and fill in its [record sheet](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md#0-record-sheet-the-test-set-fill-in-before-you-start).
 
 ## Open it
 
