@@ -50,8 +50,7 @@ class LcAppHosts {
         String problem = declarationProblem(entry.hosts)
         if (problem != null) return [listed: false, sentence: sentence(INVALID, [app: app, host: host, problem: problem])]
         List<String> declared = entry.hosts as List<String>
-        if (declared.contains(host)) return [listed: true, sentence: ""]
-        return [listed: false, sentence: sentence(NOT_LISTED, [app: app, host: host, hosts: declared.join(", ")])]
+        return declared.contains(host) ? [listed: true, sentence: ""] : [listed: false, sentence: sentence(NOT_LISTED, [app: app, host: host, hosts: declared.join(", ")])]
     }
 
     /** The rule for this host: a non-empty sentence (a skip, or the "declares no hosts" note, said every time the registry is read) goes to the Tools log; the
