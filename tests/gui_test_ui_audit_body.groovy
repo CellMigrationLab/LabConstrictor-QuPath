@@ -2,7 +2,7 @@
 // One QuPath launch runs ONE phase of the audit of ONE app (tests/run_ui_audit.sh starts them and keeps the watchdog; docs/UI_AUDIT.md says how). Environment:
 //   LC_HOME           the registry that holds the installed app            LC_APP        the registry name of the app (LC_APPS for the multi-app phase)
 //   LC_APP_TESTS      the app's lc_tests folder (cases.json, fixtures/, no_case.json)
-//   LC_SHOTS          output folder (default ./screens): matrix_qupath_<app>.json, expected_qupath_<app>.json, plan_qupath_<app>.json, qupath/<app>/*.png
+//   LC_SHOTS          output folder (default ./screens): matrix_ui_qupath_<app>.json, expected_qupath_<app>.json, plan_qupath_<app>.json, qupath/<app>/*.png
 //   LC_EXPECT_QUPATH  listed | not_listed (not_listed: only the check that the app is absent from the chooser, plus a NOTE)
 //   LC_UI_PHASE       panel | panel_run | tool | multi | not_listed      LC_UI_TOOL  the tool id of phase tool
 //   LC_UI_TOOL_TIMEOUT seconds per tool and per run (default 300)        LC_UI_CLICK robot (default) | fire         LC_UI_SEED  test-only seeded failure (ui_audit_seed.groovy)
@@ -17,7 +17,8 @@ Object uaStart(UaMatrix matrix) {
 
 /** The first tool of the plan that has a chosen case (the tool the panel checks use), or null. */
 Map uaPanelTool() {
-    return (Map) ((List<Map>) UiAudit.plan.tools).find { ((Map) UiAudit.plan.chosen).containsKey(it.id) }
+    Map chosen = (Map) UiAudit.plan.chosen, replay = (Map) UiAudit.plan.replay
+    return (Map) ((List<Map>) UiAudit.plan.tools).find { chosen.containsKey(it.id) && ((List) (replay[it.id] ?: [])).isEmpty() }      // a tool that needs no earlier case (an ordered app: not play_round)
 }
 
 void uaPhasePanel(UaMatrix matrix, String app) {
@@ -47,13 +48,14 @@ void uaPhasePanelRun(UaMatrix matrix, String app) {
     try {
         uaPrepareCase(dlg, app, tool, (Map) (testCase.inputs ?: [:]))
         evidence = uaPressRun(dlg, testCase, UiAudit.toolTimeout)
+        evidence.responseType = uaOutcome(dlg).responseType
     } catch (Throwable t) { matrix.add("ui_qupath_panel_run_prepare", "", "run", "FAIL", "the run for the panel checks failed: " + UiAudit.describe(t)) }
     uaPanelRun(dlg, refusal, evidence)
     uaCloseExtraWindows(dlg)
     uaPanelDetails(dlg)
     uaPanelRestart(dlg)
     uaPanelKeepWorker(dlg, app, tool, testCase)
-    uaScanControls(dlg, "panel_run", [tool: UiAudit.planTool((String) UiAudit.fx { dlg.currentTool?.id }), resultTool: tool, windows: []])
+    uaScanControls(dlg, "panel_run", [tool: UiAudit.planTool((String) UiAudit.fx { dlg.currentTool?.id }), resultTool: tool, windows: [app + ": " + tool.label]])      // the results window of the last run is still open here
 }
 
 void uaPhaseTool(UaMatrix matrix, String app) {
@@ -98,6 +100,8 @@ Thread.start("lc-gui-test") {
         UiAudit.seed = System.getenv("LC_UI_SEED") ?: ""
         UiAudit.clickMode = UiAudit.env("LC_UI_CLICK", "robot")
         UiAudit.toolTimeout = Integer.parseInt(UiAudit.env("LC_UI_TOOL_TIMEOUT", "300"))
+        UiAudit.runVia = UiAudit.env("LC_UI_RUN_VIA", "click")
+        if (!(UiAudit.runVia in ["click", "call"])) throw new IllegalStateException("LC_UI_RUN_VIA must be click or call")
         if (!(UiAudit.clickMode in ["robot", "fire"])) throw new IllegalStateException("LC_UI_CLICK must be robot or fire")
         List<String> names = UiAudit.phase == "multi" ? UiAudit.env("LC_APPS").split(",").collect { it.trim() }.findAll { it } : [UiAudit.env("LC_APP")]
         UiAudit.app = UiAudit.phase == "multi" ? "multi" : names[0]
@@ -107,7 +111,7 @@ Thread.start("lc-gui-test") {
             UiAudit.plan = (Map) LcJson.parse(new File(UiAudit.shots, "plan_qupath_" + UiAudit.app + ".json"))
         }
         File matrixDir = UiAudit.shots
-        if (UiAudit.phase == "multi" && !new File(matrixDir, "matrix_qupath_multi.json").isFile()) new UaMatrix("multi", matrixDir).write()
+        if (UiAudit.phase == "multi" && !new File(matrixDir, "matrix_ui_qupath_multi.json").isFile()) new UaMatrix("multi", matrixDir).write()
         UiAudit.current = new UaMatrix(UiAudit.app, matrixDir)
         try {
             switch (UiAudit.phase) {

@@ -89,9 +89,9 @@ void uaActivateParameter(Object dlg, Map p, List<String> bad, List<String> done,
     String name = p.name
     CheckBox set = (CheckBox) dlg.checks[name]
     if (set != null) {      // optional: the 'set' box enables the control; unset sends nothing
-        uaAssert(UiAudit.fx { ((Node) dlg.controls[name]).disable } == true, "optional '" + name + "' is enabled while unset")
+        uaAssert(UiAudit.fx { ((Node) dlg.controls[name]).disabled } == true, "optional '" + name + "' is enabled while unset")
         UiAudit.fx { set.fire(); null }
-        uaAssert(UiAudit.fx { !((Node) dlg.controls[name]).disable }, "ticking 'set' did not enable '" + name + "'")
+        uaAssert(UiAudit.fx { !((Node) dlg.controls[name]).disabled }, "ticking 'set' did not enable '" + name + "'")
         done << (name + ".set")
     }
     Object c = dlg.controls[name]
@@ -137,7 +137,7 @@ void uaActivateParameter(Object dlg, Map p, List<String> bad, List<String> done,
     done << name
     if (set != null) {
         UiAudit.fx { set.fire(); null }
-        uaAssert(UiAudit.fx { ((Node) dlg.controls[name]).disable } && uaGet(dlg, name) == null, "unticking 'set' for '" + name + "' did not leave it unset (" + uaGet(dlg, name) + ")")
+        uaAssert(UiAudit.fx { ((Node) dlg.controls[name]).disabled } && uaGet(dlg, name) == null, "unticking 'set' for '" + name + "' did not leave it unset (" + uaGet(dlg, name) + ")")
     }
 }
 
@@ -171,7 +171,7 @@ void uaActivatePixelSize(Object dlg, Map p, List<String> done) {
     String of = p.pixel_size_of
     File fixture = new File(UiAudit.testsDir, "fixtures/asym.tif").isFile() ? new File(UiAudit.testsDir, "fixtures/asym.tif") : new File(UiAudit.testsDir, "fixtures/blobs.tif")
     if (fixture.isFile() && dlg.imageBoxes[of] != null) {      // what the field shows for a file must be what the file's own TIFF tags say (read by javax.imageio, not by the host)
-        UiAudit.fx { def box = dlg.imageBoxes[of]; box.value = null; box.value = LcDialog.FILE_CHOICE; dlg.fileFields[of].text = fixture.absolutePath; box.value = null; box.value = LcDialog.FILE_CHOICE; dlg.fileFields[of].text = fixture.absolutePath; null }
+        UiAudit.fx { def box = dlg.imageBoxes[of]; uaFileChoice(box); dlg.fileFields[of].text = fixture.absolutePath; uaFileChoice(box); dlg.fileFields[of].text = fixture.absolutePath; null }
         Thread.sleep(1200)
         Double oracle = (Double) uaImageIoInfo(fixture.absolutePath).pixelSizeUm
         String shown = ((String) UiAudit.fx { field.text }).trim()
@@ -208,7 +208,7 @@ void uaActivateImage(Object dlg, Map p, List<String> notes) {
     }
     String fixture = new File(UiAudit.testsDir, "fixtures/blobs.tif").absolutePath
     File multi = new File(UiAudit.testsDir, "fixtures/three_channels.tif")
-    UiAudit.fx { box.value = null; box.value = LcDialog.FILE_CHOICE; file.text = (p.pick_channel && multi.isFile() ? multi.absolutePath : fixture); box.value = null; box.value = LcDialog.FILE_CHOICE; null }
+    UiAudit.fx { uaFileChoice(box); file.text = (p.pick_channel && multi.isFile() ? multi.absolutePath : fixture); uaFileChoice(box); null }
     Map read = (Map) uaGet(dlg, name)
     uaAssert(read != null && read.file == (p.pick_channel && multi.isFile() ? multi.absolutePath : fixture), "the file typed for '" + name + "' reads back " + read)
     uaAssert(UiAudit.fx { area.disable } == true, "the Image area chooser is enabled for a file")
@@ -257,6 +257,7 @@ void uaFormControls(Object dlg, String app, String toolChoice, Map tool, UaMatri
         panes.each { TitledPane pane ->
             try {
                 UiAudit.fx { pane.expanded = true; null }
+                uaWaitFor(5) { UiAudit.fx { pane.expanded && pane.content != null && pane.content.visible } == true }
                 uaAssert(UiAudit.fx { pane.expanded && pane.content != null && pane.content.visible } == true, "section '" + pane.text + "' does not open")
                 done << ("section:" + pane.text)
             } catch (Throwable t) { bad << UiAudit.describe(t) }

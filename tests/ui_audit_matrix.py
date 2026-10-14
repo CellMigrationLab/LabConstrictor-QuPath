@@ -6,11 +6,12 @@ The audit runs one QuPath launch per phase (see tests/run_ui_audit.sh). This scr
     multi     the expected ids and an empty matrix of the multi-app check (LC_APPS)
     plan      read the app's schema from the Tools CLI (an independent source: the app's own interpreter, `labconstrictor_tools list --json`) and its lc_tests, write
               <shots>/plan_qupath_<app>.json (tools, the case chosen per tool, the cases to replay first) and <shots>/expected_qupath_<app>.json (every id the audit must produce)
-    init      write an empty <shots>/matrix_qupath_<app>.json (the Groovy launches append to it)
+    init      write an empty <shots>/matrix_ui_qupath_<app>.json (the Groovy launches append to it)
     killed    a QuPath launch was killed by the watchdog: every expected id of that phase that has no row yet gets a FAIL row
     finish    the controls check from the side files of the launches, NOT_RUN rows for every expected id without a row, the summary; exit status 1 on any FAIL or NOT_RUN
 
-Matrix rows: {id, host, app, tool, control, status PASS|FAIL|NOT_RUN|HUMAN, detail, seconds, screenshot}. A line `CHECK <id> PASS|FAIL <detail>` (one line, at most 500 characters)
+Matrix `<shots>/matrix_ui_qupath_<app>.json` (the schema of LabConstrictor-Tools tests/oneoff_2026-10/matrix.py): {host, app, family "ui", started, finished|null, expected (count),
+rows: [{id, family, host, app, tool, control, status PASS|FAIL|NOT_RUN|HUMAN|NOTE, detail, seconds, screenshot, ts}]}, rewritten atomically after every row. A line `CHECK <id> PASS|FAIL <detail>` (one line, at most 500 characters)
 or `NOTE <id> not run: <reason>` is printed for every row this script adds.
 """
 import argparse
@@ -24,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 HOST = "qupath"
+FAMILY = "ui"
+STATUSES = ("PASS", "FAIL", "NOT_RUN", "HUMAN", "NOTE")
 DETAIL_CHARS = 500
 PANEL_CONTROLS = ["app_chooser", "tool_chooser", "rescan_apps", "restart_worker", "copy_as_command", "copy_terminal_command", "copy_python_snippet", "cancel", "details", "run", "keep_worker"]
 STRESS_PREFIX = "stress_"          # tools that stress memory or hang on purpose: never run through the form (the Playground declares them in no_case.json)
@@ -67,7 +70,18 @@ def write_json_atomic(path: Path, data: Any) -> None:
 
 def matrix_path(shots: Path, app: str) -> Path:
     """Where the matrix of an app is."""
-    return shots / ("matrix_qupath_%s.json" % app)
+    return shots / ("matrix_%s_%s_%s.json" % (FAMILY, HOST, app))
+
+
+def new_matrix(app: str, expected: int) -> dict[str, Any]:
+    """An empty matrix document."""
+    return {"host": HOST, "app": app, "family": FAMILY, "started": now(), "finished": None, "expected": expected, "rows": []}
+
+
+def read_expected(shots: Path, app: str) -> dict[str, str]:
+    """The ids the audit of the app must produce, with the phase (launch) that produces each: written by `plan` before anything runs."""
+    doc = read_json(shots / ("expected_qupath_%s.json" % app))
+    return dict(doc["phases"])
 
 
 def load_matrix(shots: Path, app: str) -> dict[str, Any]:
@@ -79,7 +93,9 @@ def add_row(shots: Path, app: str, row_id: str, status: str, detail: str, tool: 
     """Appends one row to the matrix and prints its CHECK or NOTE line."""
     matrix = load_matrix(shots, app)
     text = one_line(detail)
-    matrix["rows"].append({"id": row_id, "host": HOST, "app": app, "tool": tool, "control": control, "status": status, "detail": text, "seconds": seconds, "screenshot": None})
+    if status not in STATUSES:
+        raise SystemExit("unknown status %r for %s" % (status, row_id))
+    matrix["rows"].append({"id": row_id, "family": FAMILY, "host": HOST, "app": app, "tool": tool, "control": control, "status": status, "detail": text, "seconds": seconds, "screenshot": None, "ts": now()})
     write_json_atomic(matrix_path(shots, app), matrix)
     if status in ("PASS", "FAIL"):
         print("CHECK %s %s %s" % (row_id, status, text))
@@ -116,6 +132,12 @@ def load_cases(tests: Path) -> tuple[list[dict[str, Any]], dict[str, str]]:
     return cases, no_case
 
 
+def replayable(case: dict[str, Any]) -> bool:
+    """True for a case that is replayed as a prerequisite of an ordered app: any case that is not skipped, cancelled or a stress tool. A case that expects FAILED is replayed too, because it may change the
+    state the later cases depend on (Guess the Condition: the third guess is saved by the play_round case that is then refused with 'game over'); its expected outcome is asserted when it is replayed."""
+    return not case.get("skip") and case.get("cancel_after_s") is None and not str(case.get("tool", "")).startswith(STRESS_PREFIX)
+
+
 def runnable(case: dict[str, Any]) -> bool:
     """True for a case the audit may run through the form: it expects COMPLETE (the default), is not a cancel case, is not skipped and is not a stress tool."""
     expect = case.get("expect", {})
@@ -134,7 +156,7 @@ def make_plan(app: str, home: Path, tests: Path, ordered: list[str]) -> dict[str
         for index, case in enumerate(cases):
             if case.get("tool") == tool["id"] and runnable(case):
                 chosen[tool["id"]] = index
-                replay[tool["id"]] = [i for i, c in enumerate(cases[:index]) if runnable(c) and i != index] if app in ordered else []
+                replay[tool["id"]] = [i for i, c in enumerate(cases[:index]) if replayable(c)] if app in ordered else []
                 break
     return {"app": app, "python": info["python"], "tools": tools, "cases": cases, "no_case": no_case, "chosen": chosen, "replay": replay, "ordered": app in ordered}
 
@@ -162,8 +184,8 @@ def command_plan(args: argparse.Namespace) -> int:
         plan = make_plan(args.app, Path(args.home), Path(args.tests), [a for a in args.ordered.split(",") if a])
         ids = expected_ids(plan)
     write_json_atomic(shots / ("plan_qupath_%s.json" % args.app), plan)
-    write_json_atomic(shots / ("expected_qupath_%s.json" % args.app), {"host": HOST, "app": args.app, "expected": [{"id": i, "phase": p} for i, p in ids.items()]})
-    write_json_atomic(matrix_path(shots, args.app), {"host": HOST, "app": args.app, "started": now(), "finished": None, "notes": [], "rows": []})
+    write_json_atomic(shots / ("expected_qupath_%s.json" % args.app), {"host": HOST, "app": args.app, "family": FAMILY, "expected": list(ids), "phases": ids})
+    write_json_atomic(matrix_path(shots, args.app), new_matrix(args.app, len(ids)))
     print("plan %s: %d tool(s), %d expected id(s); tools: %s" % (args.app, len(plan["tools"]), len(ids), " ".join(t["id"] for t in plan["tools"])))
     return 0
 
@@ -174,8 +196,8 @@ def command_multi(args: argparse.Namespace) -> int:
     names = [a for a in args.apps.split(",") if a]
     ids = {"ui_qupath_multi_lists_%s" % sanitize(a): "multi" for a in names}
     ids.update({"ui_qupath_multi_switch_%s_%s" % (sanitize(a), sanitize(b)): "multi" for a in names for b in names if a != b})
-    write_json_atomic(shots / "expected_qupath_multi.json", {"host": HOST, "app": "multi", "expected": [{"id": i, "phase": p} for i, p in ids.items()]})
-    write_json_atomic(matrix_path(shots, "multi"), {"host": HOST, "app": "multi", "started": now(), "finished": None, "notes": [], "rows": []})
+    write_json_atomic(shots / "expected_qupath_multi.json", {"host": HOST, "app": "multi", "family": FAMILY, "expected": list(ids), "phases": ids})
+    write_json_atomic(matrix_path(shots, "multi"), new_matrix("multi", len(ids)))
     print("multi: %d expected id(s) for %s" % (len(ids), ", ".join(names)))
     return 0
 
@@ -190,11 +212,10 @@ def command_tools(args: argparse.Namespace) -> int:
 def command_killed(args: argparse.Namespace) -> int:
     """`killed`: the launch of `phase` was killed after `seconds`: its ids without a row become FAIL rows."""
     shots = Path(args.shots)
-    expected = read_json(shots / ("expected_qupath_%s.json" % args.app))["expected"]
     have = {r["id"] for r in load_matrix(shots, args.app)["rows"]}
-    for item in expected:
-        if item["phase"] == args.phase and item["id"] not in have:
-            add_row(shots, args.app, item["id"], "FAIL", "the watchdog killed QuPath after %s s during phase '%s' (%s): this check had not finished" % (args.seconds, args.phase, args.reason))
+    for row_id, phase in read_expected(shots, args.app).items():
+        if phase == args.phase and row_id not in have:
+            add_row(shots, args.app, row_id, "FAIL", "the watchdog killed QuPath after %s s during phase '%s' (%s): this check had not finished" % (args.seconds, args.phase, args.reason))
     return 0
 
 
@@ -231,9 +252,9 @@ def command_finish(args: argparse.Namespace) -> int:
             add_row(shots, args.app, "ui_qupath_controls_all_known", "PASS", "every control found is expected and every expected control was found, in every window of every launch", control="all")
     matrix = load_matrix(shots, args.app)
     have = {r["id"] for r in matrix["rows"]}
-    for item in read_json(shots / ("expected_qupath_%s.json" % args.app))["expected"]:
-        if item["id"] not in have:
-            add_row(shots, args.app, item["id"], "NOT_RUN", "expected, but no row was written (phase '%s' ended early or never ran)" % item["phase"])
+    for row_id, phase in read_expected(shots, args.app).items():
+        if row_id not in have:
+            add_row(shots, args.app, row_id, "NOT_RUN", "expected, never executed (phase '%s' ended early or never ran)" % phase)
     matrix = load_matrix(shots, args.app)
     matrix["finished"] = now()
     write_json_atomic(matrix_path(shots, args.app), matrix)
@@ -272,7 +293,7 @@ def main(argv: list[str]) -> int:
             p.add_argument("--expect", choices=["listed", "not_listed", "multi"], default="listed")
         if name == "add":
             p.add_argument("--id", required=True)
-            p.add_argument("--status", choices=["PASS", "FAIL", "NOT_RUN", "HUMAN"], required=True)
+            p.add_argument("--status", choices=list(STATUSES), required=True)
             p.add_argument("--detail", required=True)
     args = parser.parse_args(argv)
     return int(args.fn(args))

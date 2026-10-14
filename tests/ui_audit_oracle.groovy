@@ -105,17 +105,18 @@ Map uaImageIoInfo(String path) {
         reader.setInput(stream)
         def meta = reader.getImageMetadata(0)
         Double um = null
-        def root = meta.getAsTree("javax_imageio_tiff_image_1.0")
+        def root = meta.metadataFormatNames.contains("javax_imageio_tiff_image_1.0") ? meta.getAsTree("javax_imageio_tiff_image_1.0") : null      // other formats (PNG): size only, no pixel size
         Closure field = { int tag ->
+            if (root == null) return null
             def ifd = root.firstChild
             for (def e = ifd.firstChild; e != null; e = e.nextSibling) if (e.attributes.getNamedItem("number")?.nodeValue == String.valueOf(tag)) return e.firstChild.firstChild
             return null
         }
         def xres = field(282), unit = field(296)
         if (xres != null && unit != null) {
-            def r = xres.firstChild
-            double perUnit = Double.parseDouble(r.attributes.getNamedItem("value").nodeValue.split("/")[0]) / Double.parseDouble(r.attributes.getNamedItem("value").nodeValue.split("/")[1])
-            int u = Integer.parseInt(unit.firstChild.attributes.getNamedItem("value").nodeValue)
+            String[] fraction = xres.attributes.getNamedItem("value").nodeValue.split("/")      // a TIFFRational: "numerator/denominator"
+            double perUnit = Double.parseDouble(fraction[0]) / (fraction.length > 1 ? Double.parseDouble(fraction[1]) : 1d)
+            int u = Integer.parseInt(unit.attributes.getNamedItem("value").nodeValue)      // a TIFFShort: 1 none, 2 inch, 3 centimetre
             if (perUnit > 0 && u == 3) um = 10000d / perUnit
             else if (perUnit > 0 && u == 2) um = 25400d / perUnit
         }

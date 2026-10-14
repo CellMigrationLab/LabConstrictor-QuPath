@@ -1,6 +1,6 @@
 // ================================================================== UI audit, part 1: settings, matrix, guarded checks (joined in front of gui_test_ui_audit_body.groovy by tests/run_gui_test.sh, see gui_test_ui_audit_body.parts)
 // The driver of LabConstrictor-Tools docs/TEST_STRATEGY.md section 3, host `qupath`, one QuPath launch per phase (tests/run_ui_audit.sh). Every assertion runs in its own guarded block: an exception or a timeout is
-// `CHECK <id> FAIL <Type: message>` and the audit goes on. Every check rewrites <LC_SHOTS>/matrix_qupath_<app>.json (temp file, then an atomic move): a crash or a kill leaves a complete record.
+// `CHECK <id> FAIL <Type: message>` and the audit goes on. Every check rewrites <LC_SHOTS>/matrix_ui_qupath_<app>.json (temp file, then an atomic move): a crash or a kill leaves a complete record.
 // The expectations come from sources that are NOT the state asserted: the Tools CLI schema and the case files (plan_qupath_<app>.json, made by tests/ui_audit_matrix.py), the registry entry on disk,
 // the files a run writes, and the metadata of the fixture images read by QuPath's own readers.
 import java.nio.file.Files
@@ -14,26 +14,28 @@ import javafx.embed.swing.SwingFXUtils
 import javafx.stage.Stage
 import javafx.stage.Window
 
-/** The matrix of one app: rows are appended by every launch (the file is read back at the start) and rewritten after every check. Status: PASS, FAIL, NOT_RUN (expected, not executed: red), HUMAN (not automatable: listed for a person, never green). */
+/** The matrix of one app, schema of LabConstrictor-Tools tests/oneoff_2026-10/matrix.py: {host, app, family, started, finished, expected, rows[{id, family, host, app, tool, control, status, detail, seconds, screenshot, ts}]}.
+ *  Rows are appended by every launch (the file made by tests/ui_audit_matrix.py is read back at the start) and the file is rewritten after every row. Status: PASS, FAIL, NOT_RUN (expected, not executed: red),
+ *  HUMAN (not automatable: listed for a person, never green), NOTE (information, never green). */
 class UaMatrix {
     static final int DETAIL_CHARS = 500
     final String app
     final File file
     String started = stamp()
     String finished = null
+    int expected = 0
     final List<Map> rows = Collections.synchronizedList(new ArrayList<Map>())
-    final List<String> notes = Collections.synchronizedList(new ArrayList<String>())      // sentences that are no check: why a whole group of checks does not apply (an app that must not be listed)
     int failed = 0                                                                         // FAIL rows added by this launch
 
     UaMatrix(String app, File dir) {
         this.app = app
-        this.file = new File(dir, "matrix_qupath_" + app + ".json")
+        this.file = new File(dir, "matrix_ui_qupath_" + app + ".json")
         dir.mkdirs()
         if (file.isFile()) {
             Map old = (Map) LcJson.parse(file)
             started = old.started ?: started
+            expected = (old.expected ?: 0) as int
             rows.addAll((List<Map>) old.rows)
-            notes.addAll((List<String>) (old.notes ?: []))
         }
         write()
     }
@@ -47,29 +49,25 @@ class UaMatrix {
         return flat.length() > DETAIL_CHARS ? flat.substring(0, DETAIL_CHARS - 3) + "..." : flat
     }
 
-    /** Records one result and prints its line: `CHECK <id> PASS|FAIL <detail>`, or `NOTE <id> not run: <reason> [STATUS]` for NOT_RUN and HUMAN. */
+    /** Records one result and prints its line: `CHECK <id> PASS|FAIL <detail>`, or `NOTE <id> not run: <reason> [STATUS]` for NOT_RUN, HUMAN and NOTE. */
     synchronized void add(String id, String tool, String control, String status, String detail, double seconds = 0d, String screenshot = null) {
         String text = oneLine(detail)
         if (status == "FAIL") failed++
-        rows << [id: id, host: "qupath", app: app, tool: tool, control: control, status: status, detail: text, seconds: Math.round(seconds * 10d) / 10d, screenshot: screenshot]
+        rows << [id: id, family: "ui", host: "qupath", app: app, tool: tool, control: control, status: status, detail: text, seconds: Math.round(seconds * 10d) / 10d, screenshot: screenshot, ts: stamp()]
         println(status in ["PASS", "FAIL"] ? "CHECK " + id + " " + status + " " + text : "NOTE " + id + " not run: " + text + " [" + status + "]")
         write()
     }
 
-    /** A NOTE that is not a check: printed as `NOTE <id> not run: <reason>` and kept in the matrix under `notes`. */
-    synchronized void note(String id, String reason) {
-        notes << (id + ": " + oneLine(reason))
-        println "NOTE " + id + " not run: " + oneLine(reason)
-        write()
-    }
+    /** A row of status NOTE: it says why a whole group of checks does not apply (an app that must not be listed); printed as `NOTE <id> not run: <reason>`. */
+    synchronized void note(String id, String reason) { add(id, "", "", "NOTE", reason) }
 
     int count(String status) { return (int) rows.count { it.status == status } }
 
     /** Atomic rewrite: the matrix on disk is always a whole JSON document. */
     synchronized void write() {
-        Map doc = [host: "qupath", app: app, started: started, finished: finished, notes: new ArrayList<String>(notes), rows: new ArrayList<Map>(rows)]
+        Map doc = [host: "qupath", app: app, family: "ui", started: started, finished: finished, expected: expected, rows: new ArrayList<Map>(rows)]
         Path target = file.toPath()
-        Path temp = Files.createTempFile(target.parent, "matrix_qupath_", ".tmp")
+        Path temp = Files.createTempFile(target.parent, "matrix_ui_qupath_", ".tmp")
         Files.write(temp, LcJson.pretty(doc).getBytes("UTF-8"))
         Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE)
     }
@@ -84,6 +82,7 @@ class UiAudit {
     static String phase                    // panel | panel_run | tool | multi | not_listed
     static String toolId                   // phase tool: the tool of this launch
     static String seed = ""                // test-only seeded failures (ui_audit_seed.groovy)
+    static String runVia = "click"         // click: Run is a real mouse click; call: dlg.run() is called (diagnostic, see uaPressRunButton)
     static String clickMode = "robot"      // robot: a real mouse click through the window (javafx.scene.robot); fire: ButtonBase.fire() (skips hit-testing)
     static Map plan = [:]                  // plan_qupath_<app>.json
     static int toolTimeout = 300
@@ -135,7 +134,8 @@ class UiAudit {
     static String describe(Throwable t) {
         Throwable root = t
         while (root.cause != null && root.cause != root) root = root.cause
-        return t.class.simpleName + ": " + (t.message ?: "(no message)") + (root != t ? " [cause " + root.class.simpleName + ": " + root.message + "]" : "")
+        String where = (t instanceof AssertionError || t instanceof IllegalStateException) ? "" : " (at " + (root.stackTrace.find { it.fileName?.startsWith("Script1") }?.with { it.methodName + ":" + it.lineNumber } ?: "?") + ")"      // a bug of the driver or of the host: say where
+        return t.class.simpleName + ": " + (t.message ?: "(no message)") + (root != t ? " [cause " + root.class.simpleName + ": " + root.message + "]" : "") + where
     }
 
     /** The tool of the plan (the independent schema) with this id. */
@@ -165,7 +165,7 @@ void uaAssert(boolean ok, String message) {
 
 /** Opens a new LabConstrictor window the way lcShow does (the entry closure of the script is not visible from a method). */
 Object uaOpenDialog() {
-    Object dialog = UiAudit.fx { def d = new LcDialog(QuPathGUI.getInstance(), LcRegistry.load()); d.show(); d }
+    Object dialog = UiAudit.fx { def d = new LcDialog(QuPathGUI.getInstance(), LcRegistry.load()); d.show(); d.stage.x = 20; d.stage.y = 20; d }      // top left: a results window placed at the right never overlaps it (real clicks hit the topmost window)
     Thread.sleep(800)
     return dialog
 }
@@ -179,6 +179,16 @@ void uaCloseExtraWindows(Object dialog) {
     }
 }
 
+/** Gives the launch's working copy of lc_tests (UiAudit.testsDir) its pristine content again (LC_APP_TESTS_PRISTINE, set by tests/run_ui_audit.sh): a tool that writes into the fixtures can then be run twice. No-op without it. */
+void uaResetFixtures() {
+    String pristine = System.getenv("LC_APP_TESTS_PRISTINE")
+    if (!pristine) return
+    List<String> cmd = ["bash", "-c", 'set -e; find "$1" -mindepth 1 -delete; cp -rL "$2"/. "$1"/', "reset", UiAudit.testsDir.path, pristine]
+    Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start()
+    String out = p.inputStream.getText("UTF-8")
+    if (p.waitFor() != 0) throw new IllegalStateException("could not reset the working copy of lc_tests: " + out)
+}
+
 /** Waits until `test` is true (checked on the audit thread) or `seconds` pass; true when it became true. */
 boolean uaWaitFor(int seconds, Closure<Boolean> test) {
     long end = System.currentTimeMillis() + seconds * 1000L
@@ -189,10 +199,36 @@ boolean uaWaitFor(int seconds, Closure<Boolean> test) {
     return test()
 }
 
+/** Chooses "File..." in an image chooser, from another entry first so that its change listeners fire (the channel chooser reads the file then). On the JavaFX thread. A null value is never set: the extension's listeners do not take one. */
+void uaFileChoice(javafx.scene.control.ComboBox box) {
+    String other = box.items.find { it != LcDialog.FILE_CHOICE }
+    if (other != null) box.value = other
+    box.value = LcDialog.FILE_CHOICE
+}
+
+/** Scrolls every scroll pane around `node` so that the node is in the middle of its viewport (a real click on a control that is below the fold would hit something else); throws when it still is not inside. */
+void uaReveal(javafx.scene.Node node) {
+    UiAudit.fx {
+        for (javafx.scene.Node p = node.parent; p != null; p = p.parent) {
+            if (!(p instanceof javafx.scene.control.ScrollPane) || p.content == null) continue
+            javafx.scene.control.ScrollPane sp = (javafx.scene.control.ScrollPane) p
+            sp.applyCss(); sp.layout()
+            javafx.geometry.Bounds content = sp.content.localToScene(sp.content.boundsInLocal), box = node.localToScene(node.boundsInLocal), view = sp.localToScene(sp.boundsInLocal)
+            double room = content.height - view.height
+            if (room > 1d) sp.vvalue = Math.max(0d, Math.min(1d, ((box.minY - content.minY) - (view.height - box.height) / 2d) / room))
+            sp.applyCss(); sp.layout()
+            box = node.localToScene(node.boundsInLocal); view = sp.localToScene(sp.boundsInLocal)
+            if (box.minY < view.minY - 0.5 || box.maxY > view.maxY + 0.5) throw new IllegalStateException("the control is not inside the visible part of its scroll pane (control y " + box.minY + ".." + box.maxY + ", pane " + view.minY + ".." + view.maxY + ")")
+        }
+        null
+    }
+}
+
 /** Activates a button, check box or radio button the way a person does: a real mouse click on its centre through the window system (javafx.scene.robot.Robot), or `fire()` when LC_UI_CLICK=fire.
  *  There is no fallback: a click that does nothing is the check's FAIL (the effect is asserted by the caller). */
 void uaClick(javafx.scene.Node node) {
     if (UiAudit.clickMode == "fire") { UiAudit.fx { ((javafx.scene.control.ButtonBase) node).fire(); null }; return }
+    uaReveal(node)
     UiAudit.fx {
         javafx.geometry.Bounds b = node.localToScreen(node.boundsInLocal)
         if (b == null || !node.scene?.window?.showing) throw new IllegalStateException("cannot click: the control is not on a showing window")

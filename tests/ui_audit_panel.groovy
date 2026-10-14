@@ -154,11 +154,14 @@ void uaPanelKeepWorker(Object dlg, String app, Map tool, Map testCase) {
         uaAssert(UiAudit.fx { box.selected } == true, "the box is not ticked at the start (the documented default is on)")
         uaClick(box)
         uaAssert(UiAudit.fx { !box.selected }, "a click did not untick the box")
+        uaResetFixtures()
         uaPrepareCase(dlg, app, tool, (Map) (testCase.inputs ?: [:]))
         uaPressRun(dlg, testCase, UiAudit.toolTimeout)
         uaAssert(uaWaitFor(20) { UiAudit.fx { dlg.worker == null } }, "unticked, but a worker is still kept after the run")
+        uaCloseExtraWindows(dlg)      // the results window of this run; the one of the last run stays for the scan of the phase
         uaClick(box)
         uaAssert(UiAudit.fx { box.selected }, "a click did not tick the box again")
+        uaResetFixtures()
         uaPressRun(dlg, testCase, UiAudit.toolTimeout)
         uaAssert(uaWaitFor(10) { UiAudit.fx { dlg.worker != null } }, "ticked, but no worker is kept after the run")
         "unticked: no worker after a run; ticked: a worker is kept"
@@ -174,11 +177,11 @@ String uaRunRefusal(Object dlg, String app) {
         UiAudit.fx { dlg.onTool(); null }
         UiAudit.fx {
             def box = dlg.imageBoxes[missing.name]
-            if (box != null) { box.value = null; box.value = LcDialog.FILE_CHOICE; dlg.fileFields[missing.name].text = "" } else dlg.setters[missing.name]("")
+            if (box != null) { uaFileChoice(box); dlg.fileFields[missing.name].text = "" } else dlg.setters[missing.name]("")
             dlg.status.text = "idle"
             null
         }
-        uaClick(dlg.runButton)
+        uaPressRunButton(dlg)
         Thread.sleep(500)
         uaAssert(UiAudit.fx { !dlg.running } == true, "Run started with the required '" + missing.label + "' empty")
         String text = (String) UiAudit.fx { dlg.status.text }

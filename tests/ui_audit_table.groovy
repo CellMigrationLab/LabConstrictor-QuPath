@@ -144,7 +144,7 @@ String uaSignature(Node n) {
     String kind = n instanceof Spinner ? "Spinner" : n instanceof Slider ? "Slider" : n instanceof ComboBox ? "ComboBox" : n instanceof TextArea ? "TextArea" : n instanceof TextInputControl ? "TextField" :
             n instanceof RadioButton ? "RadioButton" : n instanceof CheckBox ? "CheckBox" : n instanceof MenuButton ? "MenuButton" : n instanceof Button ? "Button" : n instanceof TitledPane ? "TitledPane" :
             n instanceof ScrollPane ? "ScrollPane" : n instanceof TableView ? "TableView" : n instanceof ProgressBar ? "ProgressBar" : n.class.simpleName
-    return kind in ["Button", "CheckBox", "RadioButton", "MenuButton", "TitledPane"] ? kind + ":" + ((Labeled) n).text : kind
+    return kind in ["Button", "CheckBox", "RadioButton", "MenuButton", "TitledPane"] && !(((Labeled) n).text ?: "").isEmpty() ? kind + ":" + ((Labeled) n).text : kind      // a yes/no parameter's box has no text of its own
 }
 
 /** Both-way comparison of two signature lists as multisets: "unknown" (found, not expected) and "missing" (expected, not found), each as readable text. */

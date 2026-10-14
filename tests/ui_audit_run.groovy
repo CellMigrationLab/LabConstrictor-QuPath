@@ -32,9 +32,9 @@ void uaApplyInputs(Object dlg, Map tool, Map inputs) {
                     if (!box.items.contains(choice)) throw new IllegalStateException("'" + choice + "' is not offered for '" + name + "' (it offers " + box.items + ")")
                     box.value = choice
                 } else {
-                    box.value = null; box.value = LcDialog.FILE_CHOICE
+                    uaFileChoice(box)
                     dlg.fileFields[name].text = path
-                    box.value = null; box.value = LcDialog.FILE_CHOICE      // the channel chooser reads the file when the chooser changes
+                    uaFileChoice(box)      // the channel chooser reads the file when the chooser changes
                 }
             } else if (p.type in ["file", "table", "folder"]) {
                 dlg.setters[name](uaResolvePath(value.toString()))
@@ -175,7 +175,13 @@ String uaRunRecord(Set<String> before, String toolId) {
     return found
 }
 
-/** Presses Run (a real click) and waits for the end: returns [seconds, evidence of the buttons going busy]. A refusal (nothing started) throws with the status line. */
+/** Activates Run: a real mouse click (default), or `dlg.run()` called directly when LC_UI_RUN_VIA=call. The call mode exists because the button's action `{ run() }` of QuPath 0.7.0's extension script recurses into
+ *  Closure.run() and overflows the stack (a click starts nothing, see docs/UI_AUDIT.md "Bugs found"); it is NEVER chosen silently, and ui_qupath_panel_run fails in it, because a button that was not clicked is not shown to work. */
+void uaPressRunButton(Object dlg) {
+    if (UiAudit.runVia == "call") UiAudit.fx { dlg.run(); null } else uaClick(dlg.runButton)
+}
+
+/** Presses Run (see uaPressRunButton) and waits for the end: returns [seconds, evidence of the buttons going busy]. A refusal (nothing started) throws with the status line. */
 Map uaPressRun(Object dlg, Map testCase, int timeout) {
     List<Boolean> runFlips = Collections.synchronizedList(new ArrayList<Boolean>()), cancelFlips = Collections.synchronizedList(new ArrayList<Boolean>())
     def runListener = { o, a, b -> runFlips << b } as javafx.beans.value.ChangeListener
@@ -188,14 +194,14 @@ Map uaPressRun(Object dlg, Map testCase, int timeout) {
     }
     long t0 = System.nanoTime()
     try {
-        uaClick(dlg.runButton)
+        uaPressRunButton(dlg)
         boolean ended = uaWaitFor(timeout) {
             String report = (String) UiAudit.fx { dlg.lastReport }
             boolean idle = (boolean) UiAudit.fx { !dlg.running }
             report != null && !report.isEmpty() ? true : (idle && (System.nanoTime() - t0) / 1e9d > 5d)
         }
         if (!ended) throw new IllegalStateException("timeout: the run did not end in " + timeout + " s (status '" + UiAudit.fx { dlg.status.text } + "')")
-        if (((String) UiAudit.fx { dlg.lastReport }).isEmpty()) throw new IllegalStateException("Run was refused, nothing started: " + UiAudit.fx { dlg.status.text })
+        if (((String) UiAudit.fx { dlg.lastReport }).isEmpty()) throw new IllegalStateException("Run was refused or did nothing, nothing started (status '" + UiAudit.fx { dlg.status.text } + "')")
     } finally {
         UiAudit.fx { dlg.runButton.disableProperty().removeListener(runListener); dlg.cancelButton.disableProperty().removeListener(cancelListener); null }
     }
@@ -209,12 +215,25 @@ String uaOpenResult(Object dlg, Map outcome) {
     if (image == null || st == null) return null
     Button open = (Button) UiAudit.fx { uaAllNodes(st.scene.root).find { it instanceof Button && it.text == "Open in QuPath" } }
     if (open == null) return "no 'Open in QuPath' button in the results window"
-    UiAudit.fx { st.toFront(); null }
+    UiAudit.fx { st.x = 720; st.y = 20; st.toFront(); null }
     Thread.sleep(300)
     uaClick(open)
     String name = new File(image.path as String).name
+    // with a project open QuPath first asks whether to import the file into it (its own dialog, modal): the person says Import, a real click on that button
+    if (uaWaitFor(10) { uaStageTitles().contains("Import images to project") }) {
+        Stage imp = (Stage) UiAudit.fx { javafx.stage.Window.getWindows().find { it instanceof Stage && it.showing && it.title == "Import images to project" } }
+        Button ok = (Button) UiAudit.fx { uaAllNodes(imp.scene.root).find { it instanceof Button && it.text == "Import" } }
+        if (ok == null) return "QuPath's 'Import images to project' dialog has no Import button"
+        uaClick(ok)
+    }
+    if (uaWaitFor(15) { uaStageTitles().contains("Save changes") }) {      // the open image has changes (the result's annotations): QuPath asks whether to save them first; the person says No
+        Stage sv = (Stage) UiAudit.fx { javafx.stage.Window.getWindows().find { it instanceof Stage && it.showing && it.title == "Save changes" } }
+        Button no = (Button) UiAudit.fx { uaAllNodes(sv.scene.root).find { it instanceof Button && it.text == "No" } }
+        if (no == null) return "QuPath's 'Save changes' dialog has no No button"
+        uaClick(no)
+    }
     boolean shown = uaWaitFor(30) { (boolean) UiAudit.fx { String p = QuPathGUI.getInstance()?.imageData?.server?.path; p != null && p.contains(name) } }
-    if (!shown) return "'Open in QuPath' did not open " + name + " in the viewer in 30 s (status '" + UiAudit.fx { dlg.status.text } + "')"
+    if (!shown) return "'Open in QuPath' did not open " + name + " in the viewer in 30 s (status '" + UiAudit.fx { dlg.status.text } + "', viewer shows '" + UiAudit.fx { QuPathGUI.getInstance()?.imageData?.server?.path } + "', windows " + uaStageTitles() + ")"
     Map info = uaImageIoInfo(image.path as String)
     def server = UiAudit.fx { QuPathGUI.getInstance().imageData.server }
     return (server.width == info.width && server.height == info.height) ? null : "the image opened has " + server.width + " x " + server.height + ", the file has " + info.width + " x " + info.height
@@ -252,13 +271,15 @@ void uaRunTool(Object dlg, String app, Map tool, UaMatrix matrix) {
     Set<String> recordsBefore = (LcRuns.runsDir().list() ?: new String[0]) as Set<String>
     Closure cleanup = { UiAudit.fx { dlg.cancelButton.fire(); null }; Thread.sleep(2000); UiAudit.fx { dlg.stopWorker(true); null }; uaCloseExtraWindows(dlg) }
     uaCheck("ui_qupath_run_" + id, toolId, "run", UiAudit.toolTimeout + 120, {
-        ((List<Integer>) ((Map) UiAudit.plan.replay)[toolId] ?: []).each { Integer before ->      // a stateful app: the cases that come first in cases.json run first, through the same form
-            Map pre = cases[before]
+        ((List<Integer>) ((Map) UiAudit.plan.replay)[toolId] ?: []).each { Number before ->      // a stateful app: the cases that come first in cases.json run first, through the same form
+            Map pre = cases[before as int]
             Map preTool = UiAudit.planTool(pre.tool as String)
             uaPrepareCase(dlg, app, preTool, (Map) (pre.inputs ?: [:]))
             uaPressRun(dlg, pre, UiAudit.toolTimeout)
             Map preOutcome = uaOutcome(dlg)
-            uaAssert(preOutcome.responseType == "COMPLETION", "prerequisite case " + before + " (" + pre.tool + ") ended " + preOutcome.responseType + ": " + preOutcome.error)
+            Map preExpect = (Map) (pre.expect ?: [:])
+            if ((preExpect.status ?: "COMPLETE") == "COMPLETE") uaAssert(preOutcome.responseType == "COMPLETION", "prerequisite case " + before + " (" + pre.tool + ") ended " + preOutcome.responseType + ": " + preOutcome.error)
+            else uaAssert(preOutcome.responseType != "COMPLETION" && (preExpect.message_contains == null || (preOutcome.error ?: "").contains(preExpect.message_contains as String)), "prerequisite case " + before + " (" + pre.tool + ") expects " + preExpect.status + " " + (preExpect.message_contains ?: "") + " but ended " + preOutcome.responseType + ": " + preOutcome.error)
             uaCloseExtraWindows(dlg)
         }
         Map inputs = (Map) (testCase.inputs ?: [:])
@@ -285,12 +306,13 @@ void uaRunTool(Object dlg, String app, Map tool, UaMatrix matrix) {
         }
         String record = null
         try { record = uaRunRecord(recordsBefore, toolId) } catch (Throwable t) { bad << UiAudit.describe(t) }
-        unverified.addAll(expect.keySet().findAll { it in ["max_seconds", "progress_events_min"] }.collect { "expect." + it })
+        if (expect.max_seconds != null && (ran.seconds as double) > (expect.max_seconds as double)) bad << ("the run took " + String.format("%.1f", ran.seconds) + " s, the case allows " + expect.max_seconds + " s")
+        unverified.addAll(expect.keySet().findAll { it == "progress_events_min" }.collect { "expect." + it })
         if (unverified) matrix.add("ui_qupath_run_" + id + "_unverified", toolId, "run", "HUMAN", "expectation(s) the GUI cannot check: " + unverified.unique().join(", "))
         uaAssert(bad.isEmpty(), bad.join("; "))
         uaCloseExtraWindows(dlg)
         "COMPLETE in " + String.format("%.1f", ran.seconds) + " s, " + ((Map) outcome.outputs)?.results?.size() + " result(s) shown and checked against their files" + (uaPlacedOnOpenImage(tool, inputs) ? " and the image's hierarchy" : "") + ", record " + record
-    }, cleanup)
+    }, cleanup, afterPng.path)
     uaCloseExtraWindows(dlg)
     uaScreens(id, toolId, formPng, afterPng, matrix)
 }
@@ -301,13 +323,15 @@ void uaScreens(String id, String toolId, File formPng, File afterPng, UaMatrix m
         List<String> bad = uaScreenshotProblems(formPng, UiAudit.startedMillis) + uaScreenshotProblems(afterPng, UiAudit.startedMillis)
         uaAssert(bad.isEmpty(), bad.join("; "))
         formPng.name + " and " + afterPng.name + " exist, are fresh and of plausible size (look at them: this does not show the picture is right)"
-    }, null, "qupath/" + formPng.parentFile.name + "/" + formPng.name)
+    }, null, formPng.path)
 }
 
 /** The panel Run check, after a real run: the buttons went busy and back, as shown by listeners on their disable state; and the refusal of an empty required input. */
 void uaPanelRun(Object dlg, String refusal, Map evidence) {
     uaCheck("ui_qupath_panel_run", "", "run", UiAudit.controlTimeout, {
+        uaAssert(UiAudit.runVia == "click", "LC_UI_RUN_VIA=" + UiAudit.runVia + ": the Run button was not clicked in this launch, so it is not shown to work")
         uaAssert(evidence != null, "no tool was run, so Run was not shown to start a run")
+        uaAssert(evidence.responseType == "COMPLETION", "the run the case expects to COMPLETE ended " + evidence.responseType)
         uaAssert(evidence.runWentBusy == true, "Run did not go disabled while the run was going")
         uaAssert(evidence.cancelWentOn == true, "Cancel did not become enabled while the run was going")
         uaAssert(UiAudit.fx { !dlg.runButton.disable && dlg.cancelButton.disable } == true, "after the run Run is not enabled and Cancel disabled")
