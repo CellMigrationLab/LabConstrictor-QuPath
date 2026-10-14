@@ -138,6 +138,8 @@ Users get the jar from the Releases page (see Install). Developers: `QUPATH=/pat
     QUPATH=/path/to/QuPath JAVA_HOME=<JDK 25> ./build.sh        # QuPath 0.7 is built with Java 25
     QUPATH=/path/to/QuPath LC_HOME=<registry with NucleiSky and CellTracksColab> tests/run_gui_test.sh   # needs xvfb; 21 checks
 
+**The GUI test harness modifies the QuPath installation you point `QUPATH` at**: `tests/run_gui_test.sh` copies the jar into `$QUPATH/lib/app/` and edits `$QUPATH/lib/app/QuPath.cfg` (it adds the jar to `app.classpath`). Use a disposable copy of QuPath, not the one you work in.
+
 `BODY=gui_test_interactions_body.groovy tests/run_gui_test.sh` runs the interaction hints, messages and points against the example app of labconstrictor-tools (`labconstrictor_tools.examples.interactions`, registered in `LC_HOME`; 9 checks).
 
 `BODY=gui_test_playground_body.groovy tests/run_gui_test.sh` runs the tools of the LabConstrictor Playground app (check, device dropdown, big image, crash, no memory, 200 000 points; 8 checks; register the Playground in `LC_HOME` first).
