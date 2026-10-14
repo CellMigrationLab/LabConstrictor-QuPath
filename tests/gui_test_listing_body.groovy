@@ -63,30 +63,33 @@ String check(String expectation, String id, List<String> problems) {
     return "CHECK " + id + " " + (problems.isEmpty() ? "PASS " + expectation : "FAIL " + problems.join("; "))
 }
 
-int exitCode = 1
-String id = "qupath_listing_driver_environment"      // the id of the CHECK line: the one of the expectation as soon as it is known
-try {
-    String expectation = requiredEnvironment("LC_EXPECT_LISTED"), app = requiredEnvironment("LC_EXPECT_APP"), sentence = requiredEnvironment("LC_EXPECT_SENTENCE")
-    File home = new File(requiredEnvironment("LC_HOME"))
-    if (!(expectation in ["listed", "not_listed"])) throw new IllegalStateException("LC_EXPECT_LISTED must be listed or not_listed, not '" + expectation + "'")
-    id = expectation == "listed" ? "qupath_lists_the_app" : "qupath_does_not_list_the_app"
-    Object dialog = onFxThread { lcShow() }
-    boolean registered = new File(home, "apps/" + app + ".json").isFile()
-    if (expectation == "listed") {
-        List<String> problems = listedProblems(dialog, app)
-        if (!sentence.isEmpty() && !toolsLogHas(home, sentence)) problems << ("the Tools log does not hold: " + sentence)
-        println check("the app is offered with every tool of its schema", id, problems)
-        exitCode = problems.isEmpty() ? 0 : 1
-    } else {
-        List<String> problems = notListedProblems(dialog, home, app, sentence, registered)
-        if (!registered) println "NOTE qupath_no_registry_entry"
-        println check("the app is not offered and the skip is said", id, problems)
-        exitCode = problems.isEmpty() ? 0 : 1
+// the test script runs on the JavaFX thread: the work is done on a thread of its own, which asks the JavaFX thread for each GUI step
+Thread.start("lc-gui-test") {
+    int exitCode = 1
+    String id = "qupath_listing_driver_environment"      // the id of the CHECK line: the one of the expectation as soon as it is known
+    try {
+        String expectation = requiredEnvironment("LC_EXPECT_LISTED"), app = requiredEnvironment("LC_EXPECT_APP"), sentence = requiredEnvironment("LC_EXPECT_SENTENCE")
+        File home = new File(requiredEnvironment("LC_HOME"))
+        if (!(expectation in ["listed", "not_listed"])) throw new IllegalStateException("LC_EXPECT_LISTED must be listed or not_listed, not '" + expectation + "'")
+        id = expectation == "listed" ? "qupath_lists_the_app" : "qupath_does_not_list_the_app"
+        Object dialog = onFxThread { lcShow() }
+        boolean registered = new File(home, "apps/" + app + ".json").isFile()
+        if (expectation == "listed") {
+            List<String> problems = listedProblems(dialog, app)
+            if (!sentence.isEmpty() && !toolsLogHas(home, sentence)) problems << ("the Tools log does not hold: " + sentence)
+            println check("the app is offered with every tool of its schema", id, problems)
+            exitCode = problems.isEmpty() ? 0 : 1
+        } else {
+            List<String> problems = notListedProblems(dialog, home, app, sentence, registered)
+            if (!registered) println "NOTE qupath_no_registry_entry"
+            println check("the app is not offered and the skip is said", id, problems)
+            exitCode = problems.isEmpty() ? 0 : 1
+        }
+    } catch (Throwable t) {
+        t.printStackTrace()
+        println "CHECK " + id + " FAIL " + t.class.simpleName + ": " + t.message
+    } finally {
+        Thread.sleep(500)
+        System.exit(exitCode)
     }
-} catch (Throwable t) {
-    t.printStackTrace()
-    println "CHECK " + id + " FAIL " + t.class.simpleName + ": " + t.message
-} finally {
-    Thread.sleep(500)
-    System.exit(exitCode)
 }
