@@ -22,7 +22,7 @@ Thread.start("lc-gui-test") {
         def validate = new ProcessBuilder([PY, "-m", "labconstrictor_tools.conformance", "--validate"]).redirectErrorStream(true).start()
         def validateText = validate.inputStream.getText("UTF-8"); validate.waitFor()
         expect("the_file_validates_with_the_tools_schema", validate.exitValue() == 0, validateText.take(400))
-        expect("the_file_has_the_sections_this_host_reads", ["conformance", "limits", "host_internal_codes", "messages", "compat", "wrong_science"].every { CONF.containsKey(it) } && CONF.conformance == 1L, CONF.keySet())
+        expect("the_file_has_the_sections_this_host_reads", ["conformance", "limits", "host_internal_codes", "messages", "compat", "wrong_science", "app_hosts"].every { CONF.containsKey(it) } && CONF.conformance == 1L, CONF.keySet())
 
         // ---- limits: every key is compared with a constant of this script, or is listed as not this host's (it never prunes)
         def LIMITS = [
@@ -68,7 +68,7 @@ Thread.start("lc-gui-test") {
         def order = CONF.compat.version_order as List<String>
         expect("compat_the_version_order_is_ascending", (0..<(order.size() - 1)).every { LcCompat.compareVersions(LcCompat.parseVersion(order[it]), LcCompat.parseVersion(order[it + 1])) < 0 } && order.every { LcCompat.parseVersion(it) != null }, order)
         expect("compat_a_text_that_is_no_version_is_not_parsed", LcCompat.parseVersion("banana") == null && LcCompat.parseVersion(null) == null && LcCompat.parseVersion(5) == null && LcCompat.parseVersion("v0.2.0-rc.1") == LcCompat.parseVersion("0.2.0rc1"), "")
-        expect("compat_this_host_needs_what_the_run_record_and_prune_need", LcCompat.MIN_TOOLS_VERSION == "0.3.0a1" && LcCompat.REQUIRED_FEATURES == ["reserved_inputs_v1", "retention_prune"], "")
+        expect("compat_this_host_needs_what_the_run_record_and_prune_need", LcCompat.MIN_TOOLS_VERSION == "0.3.0a1" && LcCompat.REQUIRED_FEATURES == ["app_hosts_v1", "reserved_inputs_v1", "retention_prune"], "")
         def odd = null
         try { LcCompat.check([protocol: 1L], "banana", []) } catch (IllegalArgumentException e) { odd = e.message }
         expect("compat_a_minimum_that_is_no_version_is_a_programming_error", odd != null && odd.contains("programming error"), odd)

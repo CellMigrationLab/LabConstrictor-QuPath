@@ -64,7 +64,7 @@ Thread.start("lc-gui-test") {
         def home = new File(System.getenv("LC_HOME")); assert home.path.contains("lhome_pixel")
         home.deleteDir(); def apps = new File(home, "apps"); apps.mkdirs()
         def P = { String name, String type, Map more = [:] -> [name: name, label: name.capitalize().replace("_", " "), type: type, required: more.required != false] + more }
-        new File(apps, "pixelapp.schema.json").text = LcJson.toJson([protocol: 1, tools_version: "0.3.0a1", features: ["reserved_inputs_v1", "retention_prune"], tools: [[id: "relocalize", label: "Relocalize 2D", description: "", outputs: [], inputs: [
+        new File(apps, "pixelapp.schema.json").text = LcJson.toJson([protocol: 1, tools_version: "0.3.0a1", features: ["app_hosts_v1", "reserved_inputs_v1", "retention_prune"], tools: [[id: "relocalize", label: "Relocalize 2D", description: "", outputs: [], inputs: [
             P("reference", "image"), P("query", "image"),
             P("reference_pixel_size_um", "float", [default: 0.65, pixel_size_of: "reference", unit: "um"]), P("query_pixel_size_um", "float", [default: 0.325, pixel_size_of: "query", unit: "um"])]]]])
         new File(apps, "pixelapp.json").text = LcJson.toJson([schema: 1, name: "pixelapp", display_name: "pixelapp", version: "", prefix: INTERACTIONS.prefix, python: PY,

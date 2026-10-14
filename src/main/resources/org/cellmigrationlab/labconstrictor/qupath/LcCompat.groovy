@@ -7,9 +7,10 @@ class LcCompat {
     static final String WARN = "warn"
     static final String REFUSE = "refuse"
     /** What this host needs from the Tools of an app: the run-record helpers (`runs.build_record`, `record_json`, `done_status`) arrived in 0.3.0a1, and the `prune`
-     *  command is the feature `retention_prune`; `_job_dir` and `_calibration` are `reserved_inputs_v1`. */
+     *  command is the feature `retention_prune`; `_job_dir` and `_calibration` are `reserved_inputs_v1`; the `hosts` field of a registry entry that LcAppHosts reads is the
+     *  feature `app_hosts_v1`. */
     static final String MIN_TOOLS_VERSION = "0.3.0a1"
-    static final List<String> REQUIRED_FEATURES = ["reserved_inputs_v1", "retention_prune"]
+    static final List<String> REQUIRED_FEATURES = [LcAppHosts.FEATURE, "reserved_inputs_v1", "retention_prune"]
     private static final java.util.regex.Pattern VERSION = java.util.regex.Pattern.compile('^v?(\\d+)\\.(\\d+)(?:\\.(\\d+))?(?:[-.]?(a|alpha|b|beta|rc|c)[-.]?(\\d+))?$', java.util.regex.Pattern.CASE_INSENSITIVE)
     private static final Map<String, Integer> PRE_ORDER = [a: 0, alpha: 0, b: 1, beta: 1, rc: 2, c: 2]
     private static final int RELEASE_RANK = 3        // a release sorts after its pre-releases
