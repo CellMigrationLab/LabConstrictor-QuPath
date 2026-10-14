@@ -1,0 +1,1 @@
+{"check_installation": "reads the machine and the GPU libraries: the result depends on the runner, and the audit covers its form only"}

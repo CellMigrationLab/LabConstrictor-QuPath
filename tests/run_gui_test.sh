@@ -13,6 +13,9 @@ if "labconstrictor-qupath" not in s:
 PY
 # the script is joined from the files listed in parts.txt (the same order the extension uses), then the test body is appended
 RES=src/main/resources/org/cellmigrationlab/labconstrictor/qupath
-{ while IFS= read -r part || [ -n "$part" ]; do [ -z "$part" ] || { cat "$RES/$part"; echo; }; done < "$RES/parts.txt"; cat "tests/${BODY:-gui_test_body.groovy}"; } > "${TMPDIR:-/tmp}/lc_gui_test.groovy"
+BODY_FILE="${BODY:-gui_test_body.groovy}"; PARTS_FILE="tests/${BODY_FILE%.groovy}.parts"      # a body made of several files: tests/<body>.parts lists them, in order, to be joined in front of the body
+{ while IFS= read -r part || [ -n "$part" ]; do [ -z "$part" ] || { cat "$RES/$part"; echo; }; done < "$RES/parts.txt"
+  if [ -f "$PARTS_FILE" ]; then while IFS= read -r shared || [ -n "$shared" ]; do [ -z "$shared" ] || { cat "tests/$shared"; echo; }; done < "$PARTS_FILE"; fi
+  cat "tests/$BODY_FILE"; } > "${TMPDIR:-/tmp}/lc_gui_test.groovy"
 export QT_QPA_PLATFORM=
 xvfb-run -a -s "-screen 0 1600x1000x24" "$QUPATH/bin/QuPath" -q -Dlc.noshow=true -Dlc.qupath.test.script="${TMPDIR:-/tmp}/lc_gui_test.groovy" -Dlc.test.out="${OUT:-/tmp/qp_shots}" -Dlc.test.fixtures="$PWD/tests/fixtures"
