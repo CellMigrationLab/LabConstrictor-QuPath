@@ -1,0 +1,3 @@
+[
+  {"tool": "gated", "inputs": {"segmentation": "threshold"}, "expect": {"results": {"seen": {"segmentation": "threshold", "cellpose_diameter": null}}}}
+]

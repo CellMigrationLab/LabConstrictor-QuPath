@@ -84,8 +84,62 @@ Button uaRowButton(Object dlg, String name, String text) {
     return (Button) uaRowNodes(dlg, name).find { it instanceof Button && it.text == text }
 }
 
+/** The value that satisfies an EnabledWhen rule for the driving parameter `driver`: the first value of `equals` the driver can hold, else any value that counts as "set". Null when there is none (the caller fails, never a guess). */
+Object uaRuleValue(Map rule, Map driver) {
+    List wanted = rule.containsKey("equals") ? (rule.equals instanceof List ? (List) rule.equals : [rule.equals]) : null
+    if (driver.type == "boolean") return wanted == null ? true : wanted.find { it instanceof Boolean }
+    if (driver.type == "choice") {
+        List fits = wanted == null ? (List) driver.choices : wanted.findAll { w -> driver.choices.any { it.toString() == w.toString() } }
+        return fits ? fits.first() : null
+    }
+    if (wanted != null) return wanted.find { it != null }
+    if (wanted == null && driver.type in ["integer", "float"]) return uaKeepValue()      // a number is "set" at any value (even 0): ticking its 'set' box is all there is to do
+    return driver.type == "string" ? "audit text" : null
+}
+
+/** uaRuleValue answer: the driver's own value already satisfies the rule. */
+String uaKeepValue() { return "<keep the value>" }
+
+/** EnabledWhen: makes the row of `p` enabled the way a person does, by setting the driving parameter (and, first, its own drivers) to a value that satisfies the rule, ticking its 'set' box when it has one.
+ *  Every change is recorded in `undo` (restore with uaRestore) so the next parameter is judged from the form's starting state. */
+void uaEnableRow(Object dlg, Map tool, Map p, List<Closure> undo, int depth = 0) {
+    if (!p.enabled_when) return
+    uaAssert(depth < 8, "'" + p.name + "': the enabled_when rules form a chain of more than 8 parameters (a cycle?)")
+    Map rule = (Map) p.enabled_when
+    Map driver = ((List<Map>) tool.inputs).find { it.name == rule.param }
+    uaAssert(driver != null, "'" + p.name + "' is enabled by '" + rule.param + "', which the schema does not declare")
+    uaEnableRow(dlg, tool, driver, undo, depth + 1)
+    Object value = uaRuleValue(rule, driver)
+    uaAssert(value != null, "this driver cannot satisfy the rule of '" + p.name + "' " + rule + " with a " + driver.type + " parameter")
+    String dname = driver.name as String
+    Object before = UiAudit.fx { dlg.getters[dname]() }
+    CheckBox set = (CheckBox) dlg.checks[dname]
+    if (set != null && !UiAudit.fx { set.selected }) { UiAudit.fx { set.fire(); null }; undo << ({ UiAudit.fx { set.fire(); null } } as Closure) }
+    if (value == uaKeepValue()) {
+        uaAssert(UiAudit.fx { dlg.getters[dname]() } != null, "'" + dname + "' reads back unset after its 'set' box was ticked")
+        uaAssert(!UiAudit.fx { ((Node) dlg.wrappers[p.name as String]).disable }, "'" + p.name + "' stays disabled with '" + dname + "' set (rule " + rule + ")")
+        return
+    }
+    Object raw = driver.type == "boolean" ? value : value.toString()
+    if (before != null) {
+        Object old = driver.type == "boolean" ? before : before.toString()
+        undo << ({ UiAudit.fx { dlg.setters[dname](old); null } } as Closure)
+    }
+    UiAudit.fx { dlg.setters[dname](raw); null }
+    uaAssert(!UiAudit.fx { ((Node) dlg.wrappers[p.name as String]).disable }, "'" + p.name + "' stays disabled with '" + dname + "' = " + value + " (rule " + rule + ")")
+}
+
+/** Undoes what uaEnableRow changed, newest first. */
+void uaRestore(List<Closure> undo) { undo.reverse().each { Closure c -> c() }; undo.clear() }
+
 /** Activates the controls of one parameter and reads the state back; every problem is added to `bad`, what was done to `done`, what could not be done to `notes`. */
-void uaActivateParameter(Object dlg, Map p, List<String> bad, List<String> done, List<String> notes) {
+void uaActivateParameter(Object dlg, Map tool, Map p, List<String> bad, List<String> done, List<String> notes) {
+    List<Closure> undo = []
+    try { uaEnableRow(dlg, tool, p, undo); uaActivateEnabled(dlg, p, bad, done, notes) } finally { uaRestore(undo) }
+}
+
+/** The body of uaActivateParameter, for a row that is enabled (EnabledWhen satisfied by the caller). */
+void uaActivateEnabled(Object dlg, Map p, List<String> bad, List<String> done, List<String> notes) {
     String name = p.name
     CheckBox set = (CheckBox) dlg.checks[name]
     if (set != null) {      // optional: the 'set' box enables the control; unset sends nothing
@@ -263,7 +317,7 @@ void uaFormControls(Object dlg, String app, String toolChoice, Map tool, UaMatri
             } catch (Throwable t) { bad << UiAudit.describe(t) }
         }
         ((List<Map>) tool.inputs).each { Map p ->
-            try { uaActivateParameter(dlg, p, bad, done, notes) } catch (Throwable t) { bad << (p.name + ": " + UiAudit.describe(t)) }
+            try { uaActivateParameter(dlg, tool, p, bad, done, notes) } catch (Throwable t) { bad << (p.name + ": " + UiAudit.describe(t)) }
         }
         try { uaCheckEnabledWhen(dlg, tool) } catch (Throwable t) { bad << UiAudit.describe(t) }
         panes.each { TitledPane pane -> UiAudit.fx { pane.expanded = false; null } }
