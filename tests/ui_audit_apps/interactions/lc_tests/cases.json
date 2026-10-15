@@ -1,0 +1,7 @@
+[
+  {"tool": "list_shapes", "expect": {"status": "COMPLETE"}},
+  {"tool": "show_shape", "inputs": {"shape": "bar", "size": 40}, "expect": {"results": {"note": {"contains": "bar"}, "corners": {"rows": 2}}}},
+  {"tool": "find_bright_spots", "inputs": {"image": "fixtures/blobs.tif", "threshold": 0.5, "look_for": "bright"}, "expect": {"results": {"summary": {"contains": "spot"}}}},
+  {"tool": "outline_blobs", "inputs": {"image": "fixtures/blobs.tif", "threshold": 0.5}, "expect": {"results": {"summary": {"contains": "blob"}}}},
+  {"tool": "channel_mean", "inputs": {"image": "fixtures/blobs.tif"}, "expect": {"status": "COMPLETE"}}
+]
