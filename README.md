@@ -208,4 +208,13 @@ The same workflow fails when a part file (all but the older main script) has 600
 
 Apps in CI: `interactions` (example app of labconstrictor-tools), `adv` (`tests/adversarial_app`) and the Playground (from its `main`, with CPU PyTorch). **Skipped, with the reason printed:** `gui_test_body.groovy` (NucleiSky and CellTracksColab have no LabConstrictor bridge on their `main` branch yet, so there is nothing to install; the body runs as soon as both are registered in `LC_HOME`). The sample images of the bodies are in `tests/fixtures` (`-Dlc.test.fixtures`).
 
+### UI audit (not in CI)
+
+`tests/gui_test_ui_audit_body.groovy`, started by `tests/run_ui_audit.sh`, presses every control of the window with real mouse events, opens the form of every tool of ONE installed app, runs each tool with the cases of the app's own `lc_tests/cases.json` and writes a matrix of PASS / FAIL / NOT_RUN / HUMAN rows. It starts one QuPath per phase and per tool (minutes per app), so no CI job runs it: `tests/run_gui_ci.sh` leaves it out of the default list, and named on the command line it starts `tests/run_ui_audit.sh` (exit status 1 on any FAIL or NOT_RUN). Like the other GUI tests it modifies the QuPath installation (see above). Example, with the example app and a private registry:
+
+    LC_HOME=/tmp/lc/home tests/ci_setup_apps.sh /tmp/lc main
+    QUPATH=/path/to/QuPath LC_HOME=/tmp/lc/home LC_APP=interactions LC_APP_TESTS=tests/ui_audit_apps/interactions/lc_tests LC_SHOTS=/tmp/audit tests/run_ui_audit.sh
+
+`tests/ui_audit_apps/` holds the `lc_tests` of the test apps (`gated`, whose parameters are enabled by other parameters, is registered from `tests/ui_audit_apps/gated/app`). All variables, the control table, the check ids and the negative controls (`tests/run_ui_audit_negative.sh`) are in [docs/UI_AUDIT.md](docs/UI_AUDIT.md).
+
 `tests/gui_test_body.groovy` drives the real dialog in QuPath on a virtual screen (project with two calibrated images, both apps) and writes screenshots.
