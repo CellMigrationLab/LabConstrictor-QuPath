@@ -1108,7 +1108,7 @@ class LcDialog {
         toolBox.valueProperty().addListener({ o, a, b -> onTool() } as javafx.beans.value.ChangeListener)
         runButton.defaultButton = true
         runButton.maxWidth = Double.MAX_VALUE
-        runButton.onAction = { run() }
+        runButton.onAction = { this.run() }   // `this.`: a bare run() inside a closure is Closure.run(), which calls itself (StackOverflowError, the click did nothing)
         cancelButton.disable = true
         cancelButton.onAction = { cancel() }
         detailsButton.disable = true
