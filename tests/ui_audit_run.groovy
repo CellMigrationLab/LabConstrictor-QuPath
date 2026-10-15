@@ -255,7 +255,7 @@ void uaRunTool(Object dlg, String app, Map tool, UaMatrix matrix) {
     Map noCase = (Map) UiAudit.plan.no_case
     Integer index = ((Map) UiAudit.plan.chosen)[toolId] as Integer
     if (index == null) {
-        String reason = noCase[toolId] != null ? "declared in no_case.json: " + noCase[toolId] : null
+        String reason = noCase[toolId] != null ? "declared in no_case.json: " + noCase[toolId] : (toolId.startsWith("stress_") ? "a stress tool: it is never run through the form (a person runs it)" : null)
         if (reason != null) {
             matrix.add("ui_qupath_run_" + id, toolId, "run", "HUMAN", "no case of '" + toolId + "' is run (" + reason + "); the form checks were made")
             try { uaPrepareCase(dlg, app, tool, [:]); uaSnapshot((Stage) dlg.stage, formPng) } catch (Throwable t) { println "CHECK ui_qupath_screens_" + id + "_form FAIL " + UiAudit.describe(t) }
