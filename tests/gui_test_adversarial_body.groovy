@@ -94,6 +94,16 @@ Thread.start("lc-gui-test") {
         def anns = fx { qupath.imageData.hierarchy.annotationObjects.collect { it.name + ":" + it.ROI.numPoints } }
         println "ANNOTATIONS " + anns
         expect("replace_leaves_one_annotation", anns.count { it.startsWith("adv:pts:") } == 1, anns)
+
+        // ---- issue 17: a points record whose metadata cell holds a line break, a comma, quotes and non-ASCII text is ONE point (the Toolkit writes it as one quoted CSV record)
+        def note = "first line\nsecond, \"quoted\" \u00e9\u4e2d"
+        fx { dlg.setters["rows"](3); dlg.setters["note"](note.replace("\n", "|")) }      // the tool turns the "|" into a line break (a form field holds one line)
+        fx { dlg.run() }; Thread.sleep(2000); waitIdle(dlg, 120)
+        println "STATUS_NOTE " + status(dlg)
+        def noted = fx { qupath.imageData.hierarchy.annotationObjects.findAll { it.name == "adv:pts" }.collect { a -> a.ROI.allPoints.collect { [it.x, it.y] } } }
+        expect("issue17_multiline_metadata_gives_one_point_per_record", noted.size() == 1 && noted[0] == [[0.5d, 0.5d], [10.5d, 10.5d], [20.5d, 20.5d]], noted)
+        def noteTable = fx { resultStages().collectMany { it.scene.root.lookupAll(".table-view").toList() }.find { it.items && it.columns*.text == ["y", "x", "note"] } }
+        expect("issue17_multiline_metadata_stays_in_one_table_row", noteTable != null && fx { noteTable.items.size() == 3 && noteTable.items.every { it[2] == note } }, noteTable == null ? "no table" : fx { noteTable.items })
     } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
     finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }

@@ -101,6 +101,27 @@ Thread.start("lc-gui-test") {
         expect("csv_last_row_without_newline_and_empty_quoted_cell", items[2] == ["last", "", "3"], items[2])
         expect("csv_header_is_the_columns", fx { odd.children[0].columns*.text } == ["name", "note", "n"], fx { odd.children[0].columns*.text })
         expect("empty_file_is_an_empty_table", fx { LcDialog.tableView(csv("empty.csv", ""), "e") }.with { it instanceof Label && it.text == "(empty table)" }, "")
+
+        // ---- issue 17: one reader (LcCsv) for tables and points; a quoted line break never makes a second record, a malformed file is a sentence, not a guess
+        def errorOf = { Closure c -> try { c(); return null } catch (LcCsvError e) { return e.message } }
+        def noteFile = csv("points_note.csv", "y,x,note\n1,2,\"first line\nsecond line\"\n3.5,4.5,\"a,b \"\"q\"\" \u00e9\u4e2d\"\n5,6,\n")
+        def found = LcCsv.points(noteFile)
+        expect("issue17_points_multiline_record_is_one_point", found.ys == [1d, 3.5d, 5d] && found.xs == [2d, 4.5d, 6d], found)
+        def noteRows = LcCsv.read(noteFile, 100)
+        expect("issue17_read_keeps_the_full_multiline_text", noteRows.count == 4 && noteRows.rows[1] == ["1", "2", "first line\nsecond line"] && noteRows.rows[2][2] == "a,b \"q\" \u00e9\u4e2d" && noteRows.rows[3][2] == "", noteRows)
+        expect("issue17_rows_beyond_keep_are_counted_by_record", LcCsv.read(noteFile, 2).with { it.rows.size() == 2 && it.count == 4 }, "")
+        expect("issue17_byte_order_mark_is_dropped", LcCsv.read(csv("bom.csv", "\ufeffy,x\n1,2\n"), 10).rows[0] == ["y", "x"], "")
+        expect("issue17_crlf_and_missing_last_newline", LcCsv.read(csv("crlf.csv", "y,x\r\n1,2\r\n3,4"), 10).rows == [["y", "x"], ["1", "2"], ["3", "4"]], "")
+        expect("issue17_points_without_x_column_is_a_sentence", errorOf { LcCsv.points(csv("no_x.csv", "y,z\n1,2\n")) }?.contains("has no 'x' column"), errorOf { LcCsv.points(csv("no_x.csv", "y,z\n1,2\n")) })
+        expect("issue17_points_empty_file_is_a_sentence", errorOf { LcCsv.points(csv("none.csv", "")) }?.contains("the points file is empty"), "")
+        expect("issue17_points_short_record_is_a_sentence", errorOf { LcCsv.points(csv("short.csv", "y,x,n\n1,2,a\n3,4\n")) }?.contains("record 3 has 2 cell(s), the header has 3"), errorOf { LcCsv.points(csv("short.csv", "y,x,n\n1,2,a\n3,4\n")) })
+        expect("issue17_points_text_coordinate_is_a_sentence", errorOf { LcCsv.points(csv("text.csv", "y,x\n1,two\n")) }?.contains("record 2: 'x' is 'two', not a number"), errorOf { LcCsv.points(csv("text.csv", "y,x\n1,two\n")) })
+        expect("issue17_points_nan_coordinate_is_a_sentence", errorOf { LcCsv.points(csv("nan.csv", "y,x\nNaN,2\n")) }?.contains("not a finite number"), "")
+        expect("issue17_unclosed_quote_names_the_record_and_line", errorOf { LcCsv.read(csv("open.csv", "a,b\n1,\"never closed\nstill open\n"), 10) }?.contains("record 2 (line 2): a quoted cell is never closed"), errorOf { LcCsv.read(csv("open.csv", "a,b\n1,\"never closed\nstill open\n"), 10) })
+        expect("issue17_text_after_closing_quote_is_a_sentence", errorOf { LcCsv.read(csv("after.csv", "a\n\"x\"y\n"), 10) }?.contains("record 2 (line 2): text after the closing quote"), "")
+        expect("issue17_stray_quote_in_unquoted_cell_is_a_sentence", errorOf { LcCsv.read(csv("stray.csv", "a\nx\"y\n"), 10) }?.contains("a quote inside a cell that was not opened with one"), "")
+        def badTable = fx { LcDialog.tableView(csv("bad_table.csv", "a,b\n1,\"open\n"), "bad") }
+        expect("issue17_malformed_table_says_why_instead_of_showing_rows", badTable instanceof Label && fx { badTable.text.startsWith("table 'bad' cannot be shown: ") && badTable.text.contains("a quoted cell is never closed") }, fx { badTable.text })
         tmpDir.deleteDir()
 
     } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
