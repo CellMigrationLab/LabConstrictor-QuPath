@@ -30,6 +30,11 @@ def dims(ndim: int = 2, rows: int = 3, text_length: int = 10, fail: bool = False
     return np.ones(shape, np.uint8), pts, ("word " * text_length) + "<b>not bold</b> [link](http://example.com) **bold**"
 
 @tool("Spots")
-def spots(image: Image, rows: int = 3) -> Annotated[PointsOut, Name("pts"), ApplyTo("image"), Replace()]:
+def spots(image: Image, rows: int = 3, note: str = "") -> Annotated[PointsOut, Name("pts"), ApplyTo("image"), Replace()]:
     import pandas as pd
-    return pd.DataFrame({"y": np.arange(rows, dtype=float) * 10, "x": np.arange(rows, dtype=float) * 10}) if rows else pd.DataFrame({"y": [], "x": []})
+    if not rows:
+        return pd.DataFrame({"y": [], "x": []})
+    frame = pd.DataFrame({"y": np.arange(rows, dtype=float) * 10, "x": np.arange(rows, dtype=float) * 10})
+    if note:  # a metadata column whose text may hold line breaks, commas and quotes: the Toolkit writes it as one quoted CSV cell (issue 17)
+        frame["note"] = note
+    return frame

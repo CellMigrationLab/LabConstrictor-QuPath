@@ -792,6 +792,11 @@ class LcRegistry {
             for (p in tool.inputs) {
                 if (!(p instanceof Map) || !identifier(p.name) || !(p.label instanceof String))
                     return "tool '" + tool.id + "' has a parameter without an identifier name and a text label"
+                if (p.type == "choice" && !(p.choices instanceof List && p.choices)) return "tool '" + tool.id + "': choice parameter '" + p.name + "' has no choices"      // as the Fiji script
+            }
+            for (o in tool.outputs) {      // the results window reads `name`, `type` and `replace` of each declared output
+                if (!(o instanceof Map) || !plainName(o.name) || !(o.type instanceof String))
+                    return "tool '" + tool.id + "' has an output without a plain name and a text type"
             }
         }
         return null
@@ -2515,7 +2520,13 @@ class LcDialog {
                 messageLabel.visible = true; messageLabel.managed = true
                 break
             case "points":
-                box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), new Label(placePoints(appName, r)), tableView(r.path as String, (r.name ?: "points") as String))
+                String placed
+                try { placed = placePoints(appName, r) }
+                catch (LcCsvError problem) {
+                    LcLog.warn("points '" + r.name + "' not placed", problem)
+                    placed = "Not placed on an image: " + problem.message
+                }
+                box.children.addAll(boldLabel((r.name ?: "points") + " (points)"), wrapped(placed), tableView(r.path as String, (r.name ?: "points") as String))
                 break
             case "shapes":
                 box.children.addAll(boldLabel((r.name ?: "shapes") + " (outlines)"), wrapped(placeShapes(appName, r)))
@@ -2663,16 +2674,10 @@ class LcDialog {
             LcLog.once("points-not-placed:" + appName + ":" + r.name, "points '" + r.name + "' not placed: they were not found in the image open in QuPath (table only)")
             return notPlacedSentence(r, "points")
         }
-        def lines = new File(r.path as String).readLines("UTF-8")
-        def header = splitCsv(lines[0])
-        def yi = header.indexOf("y"), xi = header.indexOf("x")
         def area = areaFor(r)
-        def ys = [], xs = []
-        lines.drop(1).each { line ->          // pixel centres, moved by the Image area's offset
-            def cells = splitCsv(line)
-            ys << LcArea.slideY(area, (cells[yi] as double) + 0.5d)
-            xs << LcArea.slideX(area, (cells[xi] as double) + 0.5d)
-        }
+        Map found = LcCsv.points(r.path as String)          // an LcCsvError (malformed file, missing column, bad coordinate) places nothing; addResult says why
+        def ys = found.ys.collect { LcArea.slideY(area, (it as double) + 0.5d) }      // pixel centres, moved by the Image area's offset
+        def xs = found.xs.collect { LcArea.slideX(area, (it as double) + 0.5d) }
         def name = appName + ":" + r.name
         def hierarchy = data.hierarchy
         def previous = hierarchy.annotationObjects.findAll { it.name == name }
@@ -2777,8 +2782,13 @@ class LcDialog {
 
     /** The first LcConst.TABLE_ROWS_SHOWN rows of a CSV file as a table; under it "table 'name' (N rows, first M shown)" (the Napari sentence) and the path. */
     static Node tableView(String csvPath, String name) {
-        def csv = readCsv(csvPath, LcConst.TABLE_ROWS_SHOWN + 1)      // the header and the rows that are shown
-        def rows = csv.rows
+        Map csv
+        try { csv = LcCsv.read(csvPath, LcConst.TABLE_ROWS_SHOWN + 1) }      // the header and the rows that are shown
+        catch (LcCsvError problem) {
+            LcLog.warn("table '" + name + "' cannot be shown", problem)
+            return wrapped("table '" + name + "' cannot be shown: " + problem.message)      // the sentence names the record; the file is left as it is
+        }
+        List<List<String>> rows = csv.rows as List<List<String>>
         if (rows.isEmpty()) return new Label("(empty table)")
         def table = new TableView<List<String>>()
         rows[0].eachWithIndex { String h, int i ->
@@ -2789,54 +2799,8 @@ class LcDialog {
         rows.drop(1).each { table.items.add(it) }
         table.prefHeight = LcConst.TABLE_HEIGHT
         int shown = rows.size() - 1
-        def counted = shown + csv.hidden
-        return new VBox(4, table, new Label("table '" + name + "' (" + (csv.hidden ? counted + " rows, first " + shown + " shown; the full table is in " + csvPath : counted + " rows") + ")  " + csvPath))
-    }
-
-    /** A CSV file as records: [rows: the first `keep` records (cells as text), hidden: how many more there are]. A quoted cell may hold commas, doubled quotes and line breaks. */
-    static Map readCsv(String csvPath, int keep) {
-        def rows = [], row = [], cell = new StringBuilder()
-        int hidden = 0
-        boolean quoted = false, any = false
-        def endRecord = {
-            row << cell.toString(); cell.setLength(0)
-            if (rows.size() < keep) rows << row else hidden++
-            row = []; any = false
-        }
-        new File(csvPath).withReader("UTF-8") { reader ->
-            int previous = -1
-            int c = reader.read()
-            for (; c != -1; c = reader.read()) {
-                any = true
-                if (quoted) {
-                    if (c == 34) { quoted = false } else cell.append((char) c)
-                } else if (c == 34 && previous == 34) {         // a doubled quote inside a quoted cell: one quote
-                    cell.append('"'); quoted = true
-                } else if (c == 34) { quoted = true }
-                else if (c == 44) { row << cell.toString(); cell.setLength(0) }
-                else if (c == 10) { endRecord() }
-                else if (c != 13) cell.append((char) c)
-                previous = c
-            }
-        }
-        if (any) endRecord()
-        return [rows: rows, hidden: hidden]
-    }
-
-    /** One CSV line into cells: commas separate, double quotes group, a doubled quote is one quote (no multi-line cells). */
-    static List<String> splitCsv(String line) {
-        def out = [], cur = new StringBuilder()
-        boolean quoted = false
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i)
-            if (quoted) {
-                if (c == ('"' as char)) { if (i + 1 < line.length() && line.charAt(i + 1) == ('"' as char)) { cur.append('"'); i++ } else quoted = false } else cur.append(c)
-            } else if (c == ('"' as char)) quoted = true
-            else if (c == (',' as char)) { out << cur.toString(); cur.setLength(0) }
-            else cur.append(c)
-        }
-        out << cur.toString()
-        return out
+        long counted = (csv.count as long) - 1        // the records of the file without the header
+        return new VBox(4, table, new Label("table '" + name + "' (" + (counted > shown ? counted + " rows, first " + shown + " shown; the full table is in " + csvPath : counted + " rows") + ")  " + csvPath))
     }
 }
 

@@ -57,6 +57,26 @@ mk("trust_param_name_space") { e, p -> } { s -> s.tools[0].inputs[0].name = "a b
 mk("trust_tool_id_path") { e, p -> } { s -> s.tools[0].id = "../x" }
 mk("trust_protocol_2") { e, p -> } { s -> s.protocol = 2 }
 mk("trust_tool_no_outputs") { e, p -> } { s -> s.tools[0].remove("outputs") }
+// issue 20: malformed entries and cached schemas are refused with a reason before they reach the app selector or the form
+mk("trust_tools_none") { e, p -> } { s -> s.tools = null }
+mk("trust_tools_not_list") { e, p -> } { s -> s.tools = "x" }
+mk("trust_tool_not_object") { e, p -> } { s -> s.tools = [3] }
+mk("trust_tool_no_label") { e, p -> } { s -> s.tools[0].remove("label") }
+mk("trust_inputs_not_list") { e, p -> } { s -> s.tools[0].inputs = "x" }
+mk("trust_param_not_object") { e, p -> } { s -> s.tools[0].inputs = [7] }
+mk("trust_param_name_missing") { e, p -> } { s -> s.tools[0].inputs[0].remove("name") }
+mk("trust_param_name_not_text") { e, p -> } { s -> s.tools[0].inputs[0].name = 5 }
+mk("trust_param_no_label") { e, p -> } { s -> s.tools[0].inputs[0].remove("label") }
+mk("trust_choice_without_choices") { e, p -> } { s -> s.tools[0].inputs[0].type = "choice" }
+mk("trust_choice_empty_choices") { e, p -> } { s -> s.tools[0].inputs[0].type = "choice"; s.tools[0].inputs[0].choices = [] }
+mk("trust_output_not_object") { e, p -> } { s -> s.tools[0].outputs = ["x"] }
+mk("trust_output_no_name") { e, p -> } { s -> s.tools[0].outputs = [[type: "table"]] }
+mk("trust_output_name_path") { e, p -> } { s -> s.tools[0].outputs = [[name: "../x", type: "table"]] }
+mk("trust_output_no_type") { e, p -> } { s -> s.tools[0].outputs = [[name: "t"]] }
+mk("trust_pythonpath_item_not_text") { e, p -> e.pythonpath = [1] }
+mk("trust_runtime_path_not_text") { e, p -> e.runtime_path = 5 }
+mk("trust_module_empty") { e, p -> e.module = "" }
+mk("trust_choice_and_outputs_ok") { e, p -> } { s -> s.tools[0].inputs[0].type = "choice"; s.tools[0].inputs[0].choices = ["a", "b"]; s.tools[0].outputs = [[name: "t", type: "table"], [name: "pts", type: "points", replace: true]] }
 mk("trust_tools_old") { e, p -> } { s -> s.tools_version = "0.2.0rc1" }
 mk("trust_tools_no_feature") { e, p -> } { s -> s.features = ["app_hosts_v1", "reserved_inputs_v1"] }
 mk("trust_tools_no_hosts_feature") { e, p -> } { s -> s.features = ["reserved_inputs_v1", "retention_prune"] }
@@ -96,6 +116,25 @@ refused("trust_param_name_space", "parameter without an identifier name")
 refused("trust_tool_id_path", "a tool has an unexpected structure")
 refused("trust_protocol_2", "schema protocol 2 is not supported (this host speaks [1])")
 refused("trust_tool_no_outputs", "a tool has an unexpected structure")
+refused("trust_tools_none", "schema has no list of tools")
+refused("trust_tools_not_list", "schema has no list of tools")
+refused("trust_tool_not_object", "a tool has an unexpected structure")
+refused("trust_tool_no_label", "a tool has an unexpected structure")
+refused("trust_inputs_not_list", "a tool has an unexpected structure")
+refused("trust_param_not_object", "parameter without an identifier name")
+refused("trust_param_name_missing", "parameter without an identifier name")
+refused("trust_param_name_not_text", "parameter without an identifier name")
+refused("trust_param_no_label", "parameter without an identifier name and a text label")
+refused("trust_choice_without_choices", "choice parameter 'x_1' has no choices")
+refused("trust_choice_empty_choices", "choice parameter 'x_1' has no choices")
+refused("trust_output_not_object", "has an output without a plain name and a text type")
+refused("trust_output_no_name", "has an output without a plain name and a text type")
+refused("trust_output_name_path", "has an output without a plain name and a text type")
+refused("trust_output_no_type", "has an output without a plain name and a text type")
+refused("trust_pythonpath_item_not_text", "field 'pythonpath' must be a list of strings")
+refused("trust_runtime_path_not_text", "field 'runtime_path' must be a string")
+refused("trust_module_empty", "field 'module' must be a non-empty string")
+expect("trust_valid_choice_and_outputs_load", loaded.contains("trust_choice_and_outputs_ok") && problemOf("trust_choice_and_outputs_ok") == null, problemOf("trust_choice_and_outputs_ok"))
 // the compatibility rules (LcCompat, the vectors of conformance.json): an app whose Tools lacks what this host needs is not offered, with one sentence; an unparsable version only warns
 refused("trust_tools_old", "this app's labconstrictor-tools 0.2.0rc1 is older than the 0.3.0a1 this host needs: update it")
 refused("trust_tools_no_feature", "this app's labconstrictor-tools lacks retention_prune: update it")
