@@ -1,0 +1,5 @@
+[
+  {"tool": "probe", "inputs": {"image": "fixtures/asym.tif", "y": 1.0, "x": 2.0}, "expect": {"results": {"marks": {"rows": 1}, "done": {"contains": "probed"}}}},
+  {"tool": "pixel_required", "inputs": {"image": "fixtures/asym.tif", "pixel_size": 0.5}, "expect": {"results": {"seen": {"pixel_size": 0.5}}}},
+  {"tool": "pixel_optional", "inputs": {"image": "fixtures/asym.tif"}, "expect": {"status": "COMPLETE"}}
+]
