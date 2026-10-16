@@ -36,5 +36,5 @@ def spots(image: Image, rows: int = 3, note: str = "") -> Annotated[PointsOut, N
         return pd.DataFrame({"y": [], "x": []})
     frame = pd.DataFrame({"y": np.arange(rows, dtype=float) * 10, "x": np.arange(rows, dtype=float) * 10})
     if note:  # a metadata column whose text may hold line breaks, commas and quotes: the Toolkit writes it as one quoted CSV cell (issue 17)
-        frame["note"] = note
+        frame["note"] = note.replace("|", "\n")  # a text field of the form is one line, so a "|" in the text stands for the line break
     return frame

@@ -97,7 +97,7 @@ Thread.start("lc-gui-test") {
 
         // ---- issue 17: a points record whose metadata cell holds a line break, a comma, quotes and non-ASCII text is ONE point (the Toolkit writes it as one quoted CSV record)
         def note = "first line\nsecond, \"quoted\" \u00e9\u4e2d"
-        fx { dlg.setters["rows"](3); dlg.setters["note"](note) }
+        fx { dlg.setters["rows"](3); dlg.setters["note"](note.replace("\n", "|")) }      // the tool turns the "|" into a line break (a form field holds one line)
         fx { dlg.run() }; Thread.sleep(2000); waitIdle(dlg, 120)
         println "STATUS_NOTE " + status(dlg)
         def noted = fx { qupath.imageData.hierarchy.annotationObjects.findAll { it.name == "adv:pts" }.collect { a -> a.ROI.allPoints.collect { [it.x, it.y] } } }
