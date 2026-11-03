@@ -96,6 +96,9 @@ content = runs.build_record(request["app"], request["tool"], request["inputs"], 
 content["host"] = request["host"]
 sys.stdout.write("\\n" + json.dumps({"text": runs.record_json(content), "done_status": runs.done_status(request["status"], bool(request.get("cancel_requested")))}) + "\\n")
 '''
+    // HELPER as the argument of `python -c`. Windows has no argument array: Java joins the arguments into one command line without escaping the double quotes inside one, and Python
+    // then drops them (`request["app"]` arrives as `request[app]`, so no run record was ever written). The source travels as base64 in a line with no quote, space or backslash.
+    static final String ARGUMENT = "exec(__import__('base64').b64decode('" + HELPER.getBytes("UTF-8").encodeBase64() + "'))"
 
     /** What the helper needs for one finished run: the task fields come from the worker's last message (`outcome`); a worker that was killed after Cancel is a crash that followed Cancel. */
     static Map<String, Object> request(Map run) {
@@ -111,7 +114,7 @@ sys.stdout.write("\\n" + json.dumps({"text": runs.record_json(content), "done_st
 
     /** Runs the helper in the app's interpreter: [text: the text of run.json, doneStatus: the status for the done markers]. Throws IllegalStateException with the reason when it cannot. */
     static Map<String, String> build(Map entry, Map<String, Object> request) {
-        ProcessBuilder builder = new ProcessBuilder([entry.python as String, "-c", HELPER])
+        ProcessBuilder builder = new ProcessBuilder([entry.python as String, "-c", ARGUMENT])
         LcPython.applyEnvironment(builder, entry)
         Process process
         try { process = builder.start() }
