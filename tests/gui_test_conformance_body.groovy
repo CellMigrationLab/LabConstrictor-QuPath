@@ -84,6 +84,13 @@ Thread.start("lc-gui-test") {
             [name: "failed_even_after_cancel", outcome: [responseType: "FAILURE", error: "x", cancelRequested: true], expect: RET.done_status.by_task_status.FAILED],
             [name: "crashed_without_cancel", outcome: [responseType: "CRASH", error: "x", cancelRequested: false], expect: RET.done_status.by_task_status.CRASHED],
             [name: "crashed_after_cancel_is_the_worker_killed_after_the_grace_period", outcome: [responseType: "CANCELATION", workerStopped: true, error: "x", cancelRequested: true], expect: RET.done_status.crashed_after_cancel]]
+        // Windows joins the arguments into one command line and drops unescaped double quotes: the helper's `-c` argument must have none, nor spaces or backslashes
+        expect("run_record_helper_argument_has_no_double_quote_space_or_backslash", !(LcRunRecord.ARGUMENT =~ /["\s\\]/), LcRunRecord.ARGUMENT.take(80))
+        expect("run_record_helper_argument_carries_the_source_unchanged",
+               new String((LcRunRecord.ARGUMENT =~ /b64decode\('([A-Za-z0-9+\/=]+)'\)/)[0][1].decodeBase64(), "UTF-8") == LcRunRecord.HELPER, "")
+        def quoted = LcRunRecord.build(interactions, LcRunRecord.request([app: "interactions", tool: "t", inputs: [image: "C:\\data\\say \"hi\" \u00b5m.tif"], outcome: [responseType: "COMPLETION"],
+                                                                        seconds: 0d, stderr: "a \"quoted\" line\n", runId: "r", startedUtc: "2026-10-13T00:00:00.000Z"]))
+        expect("run_record_keeps_quotes_backslashes_and_non_ascii_in_the_values", (LcJson.parseText(quoted.text) as Map).inputs.image == "C:\\data\\say \"hi\" \u00b5m.tif", quoted)
         ends.each { Map end ->
             def built = LcRunRecord.build(interactions, LcRunRecord.request([app: "interactions", tool: "t", inputs: [:], outcome: end.outcome, seconds: 0d, stderr: "", runId: "r", startedUtc: "2026-10-13T00:00:00.000Z"]))
             expect("done_status_" + end.name + "_is_" + end.expect, built.doneStatus == end.expect, built)
