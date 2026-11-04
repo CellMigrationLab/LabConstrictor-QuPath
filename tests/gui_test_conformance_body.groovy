@@ -91,6 +91,10 @@ Thread.start("lc-gui-test") {
         def quoted = LcRunRecord.build(interactions, LcRunRecord.request([app: "interactions", tool: "t", inputs: [image: "C:\\data\\say \"hi\" \u00b5m.tif"], outcome: [responseType: "COMPLETION"],
                                                                         seconds: 0d, stderr: "a \"quoted\" line\n", runId: "r", startedUtc: "2026-10-13T00:00:00.000Z"]))
         expect("run_record_keeps_quotes_backslashes_and_non_ascii_in_the_values", (LcJson.parseText(quoted.text) as Map).inputs.image == "C:\\data\\say \"hi\" \u00b5m.tif", quoted)
+        // Windows ends the worker's lines with \r\n: each message is one line, with no empty line after it (issue #42)
+        def outputLines = []
+        LcWorker.eachOutputLine(new ByteArrayInputStream("{\"task\":\"a\"}\r\n{\"task\":\"b\"}\r\n\r\nprinted \u00b5\n".getBytes("UTF-8"))) { String line -> outputLines << line }
+        expect("worker_output_crlf_gives_one_line_per_message_and_no_empty_line", outputLines == ["{\"task\":\"a\"}", "{\"task\":\"b\"}", "printed \u00b5"], outputLines)
         ends.each { Map end ->
             def built = LcRunRecord.build(interactions, LcRunRecord.request([app: "interactions", tool: "t", inputs: [:], outcome: end.outcome, seconds: 0d, stderr: "", runId: "r", startedUtc: "2026-10-13T00:00:00.000Z"]))
             expect("done_status_" + end.name + "_is_" + end.expect, built.doneStatus == end.expect, built)

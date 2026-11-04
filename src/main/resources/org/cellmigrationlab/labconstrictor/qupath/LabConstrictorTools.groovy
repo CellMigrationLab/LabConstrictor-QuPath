@@ -859,6 +859,18 @@ class LcWorker implements LcWorkerLike {
     volatile boolean cancelRequested = false            // the person pressed Cancel during the run in progress (Tools Task.cancel_requested): a crash that follows is recorded as cancelled, not failed
     private int counter = 0
 
+    /** Calls `eachLine` with every non-blank line of the worker's output. A BufferedReader: Groovy's readLine on the unbuffered reader that
+     *  `withReader` gives ends a line at `\r` and returns the `\n` as an empty line, so on Windows (`\r\n`) every message was followed by an
+     *  empty "[not a protocol message]" in Details and in the run record (issue #42). A blank line carries nothing and is skipped. */
+    static void eachOutputLine(InputStream stream, Closure eachLine) {
+        new BufferedReader(new InputStreamReader(stream, java.nio.charset.StandardCharsets.UTF_8)).withCloseable { BufferedReader reader ->
+            String line
+            while ((line = reader.readLine()) != null) {
+                if (!line.trim().isEmpty()) eachLine(line)
+            }
+        }
+    }
+
     LcWorker(Map entry) {
         def command = [entry.python as String, "-m", "labconstrictor_tools", "serve", "--module", entry.module as String]
         def pb = new ProcessBuilder(command)
@@ -867,22 +879,19 @@ class LcWorker implements LcWorkerLike {
         STARTED.incrementAndGet()
         Thread.start("lc-stdout") {
             try {
-                proc.inputStream.withReader("UTF-8") { reader ->
-                    String line
-                    while ((line = reader.readLine()) != null) {
-                        def msg = null
-                        try {
-                            msg = LcJson.parseText(line)
-                        } catch (com.google.gson.JsonParseException e) {     // not JSON: a stray print of the tool or a library
-                            msg = null
-                            LcLog.warn("worker output that is not a protocol message: " + line.take(LcConst.LOG_LINE_CHARS), e)
-                        }
-                        if (msg instanceof Map) {
-                            def queue = tasks.get(msg.task)
-                            if (queue != null) queue.put(msg)
-                        } else {
-                            stderrTail.append("[not a protocol message] ").append(line.take(LcConst.STDERR_LINE_CHARS)).append("\n")    // shown in Details and in a crash text
-                        }
+                eachOutputLine(proc.inputStream) { String line ->
+                    def msg = null
+                    try {
+                        msg = LcJson.parseText(line)
+                    } catch (com.google.gson.JsonParseException e) {     // not JSON: a stray print of the tool or a library
+                        msg = null
+                        LcLog.warn("worker output that is not a protocol message: " + line.take(LcConst.LOG_LINE_CHARS), e)
+                    }
+                    if (msg instanceof Map) {
+                        def queue = tasks.get(msg.task)
+                        if (queue != null) queue.put(msg)
+                    } else {
+                        stderrTail.append("[not a protocol message] ").append(line.take(LcConst.STDERR_LINE_CHARS)).append("\n")    // shown in Details and in a crash text
                     }
                 }
             } catch (IOException e) {      // the pipe closes when the worker ends or is killed; the CRASH below tells the person if a run was waiting
