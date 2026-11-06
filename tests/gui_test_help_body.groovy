@@ -74,7 +74,8 @@ Thread.start("lc-gui-test") {
             def tip = fx { dlg.wrappers[name].properties[LcHelp.STYLE_CLASS] }
             def text = described.find { it.name == name }?.description
             seen << [name, fx { at.focusVisible }, fx { tip?.showing }]
-            expect("tab_into_" + name + "_shows_its_help", fx { at.focusVisible && tip.showing && tip.text == text }, seen.last())
+            // the help, not JavaFX's focusVisible: a Spinner clears that when it hands its focus to its text field and takes it back
+            expect("tab_into_" + name + "_shows_its_help", fx { tip.showing && tip.text == text }, seen.last() + [at.class.simpleName])
         }
         expect("tab_reached_at_least_two_inputs", seen*.get(0).unique().size() >= 2, seen)
         fx { dlg.wrappers.values().each { w -> w.properties[LcHelp.STYLE_CLASS]?.hide() } }
