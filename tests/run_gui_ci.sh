@@ -31,6 +31,7 @@ for b in area buttons channel copy fallbacks interactions region run_button shap
 for b in parity_form parity_host parity_lifecycle parity_messages parity_pixel parity_results parity_support parity_quote; do needs[gui_test_${b}_body.groovy]="interactions"; done
 needs[gui_test_parity_cancel_body.groovy]="LabConstrictorPlayground interactions"
 needs[gui_test_app_hosts_body.groovy]="interactions"
+needs[gui_test_help_body.groovy]="interactions runs"
 # bodies that write their own registry and results (they empty LC_HOME first, so each gets a scratch LC_HOME named as the body asserts; the registered apps stay in LC_SHARED_HOME)
 declare -A scratch=([gui_test_parity_trust_body.groovy]=lhome_trust [gui_test_parity_form_body.groovy]=lhome_form [gui_test_parity_host_body.groovy]=lhome_host
   [gui_test_parity_lifecycle_body.groovy]=lhome_life [gui_test_parity_pixel_body.groovy]=lhome_pixel [gui_test_parity_support_body.groovy]=lhome_support
