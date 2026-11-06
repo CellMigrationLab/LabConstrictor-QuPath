@@ -1,6 +1,7 @@
 // ================================================================== GUI test body: registry trust checks (QP-1; appended to the tool script by tests/run_gui_test.sh)
 // Needs no image and no app: it writes its own registry entries into $LC_HOME/apps (a scratch folder, emptied first) and calls LcRegistry.load().
-// Owner checks need a second user ("tester") and root to chown; they are skipped (and say so) when chown is not allowed.
+// Owner checks need a second user ("tester") and root (or passwordless sudo) to chown; they are skipped (and say so) when chown is not allowed,
+// unless LC_REQUIRE_OWNER_CHECKS=1 (CI sets it, .github/workflows/qupath-gui.yml): then a check that cannot be made is a failure, never a skip.
 def results = [:]
 def expect = { String name, boolean ok, Object detail = "" ->
     results[name] = ok
@@ -34,7 +35,14 @@ def mk = { String name, Closure entryMods = null, Closure schemaMods = null ->
     return [entryFile, schemaFile]
 }
 def probe = new File(home, "probe"); probe.text = "x"
-def canChown = ["chown", "tester", probe.path].execute().waitFor() == 0
+// chown as this user (root), else through sudo without a password prompt (-n: a CI runner); a missing sudo is "not allowed"
+def chownTo = { String user, File f ->
+    if (["chown", user, f.path].execute().waitFor() == 0) return true
+    try { return ["sudo", "-n", "chown", user, f.path].execute().waitFor() == 0 } catch (IOException noSudo) { return false }
+}
+def canChown = chownTo("tester", probe)
+if (System.getenv("LC_REQUIRE_OWNER_CHECKS") == "1")
+    expect("trust_owner_checks_can_run", canChown, "LC_REQUIRE_OWNER_CHECKS=1 but this process cannot chown a file to the user 'tester' (create the user; run as root or with passwordless sudo)")
 
 mk("trust_ok")
 mk("trust_group_writable_entry") { e, p -> }.with { chmod("664", it[0]) }
@@ -84,8 +92,9 @@ mk("trust_tools_no_fields") { e, p -> } { s -> s.remove("tools_version"); s.remo
 mk("trust_tools_no_version") { e, p -> } { s -> s.remove("tools_version") }
 mk("trust_tools_banana") { e, p -> } { s -> s.tools_version = "banana" }
 mk("trust_tools_newer") { e, p -> } { s -> s.tools_version = "0.10.0"; s.features = ["app_hosts_v1", "reserved_inputs_v1", "retention_prune", "later"] }
-mk("trust_owner_other") { e, p -> }.with { if (canChown) assert ["chown", "tester", it[0].path].execute().waitFor() == 0 }
-mk("trust_schema_owner_other").with { if (canChown) assert ["chown", "tester", it[1].path].execute().waitFor() == 0 }
+mk("trust_owner_other") { e, p -> }.with { if (canChown) assert chownTo("tester", it[0]) }
+mk("trust_schema_owner_other").with { if (canChown) assert chownTo("tester", it[1]) }
+mk("trust_user_entry_owned_by_root").with { if (canChown) assert chownTo("root", it[0]) }      // root may own entries in shared folders only, not in your own
 
 def registry = LcRegistry.load()
 def loaded = registry.apps.keySet(), problems = registry.problems as List<String>
@@ -147,6 +156,8 @@ expect("trust_a_good_app_has_no_warning", !(registry.warnings as List<String>).a
 if (canChown) {
     refused("trust_owner_other", "entry file is not owned by the current user")
     refused("trust_schema_owner_other", "schema file is not owned by the current user")
+    refused("trust_user_entry_owned_by_root", "entry file is not owned by the current user")
+    expect("trust_root_is_not_accepted_in_the_user_folder", problemOf("trust_user_entry_owned_by_root")?.endsWith("entry file is not owned by the current user") == true, problemOf("trust_user_entry_owned_by_root"))      // the sentence for a shared folder ends "or root"
 } else println "NOTE owner checks skipped: chown is not allowed here"
 expect("trust_no_null_pointer_text_anywhere", !problems.any { it.contains("null") && !it.contains("not a JSON") && !it.contains("must be") }, problems)
 // a hostile parameter name must never reach a file name: nothing was written outside the scratch folder
