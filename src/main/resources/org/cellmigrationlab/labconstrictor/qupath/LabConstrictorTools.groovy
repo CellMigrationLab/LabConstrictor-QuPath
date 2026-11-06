@@ -1042,6 +1042,7 @@ class LcDialog {
     Map<String, Stage> resultWindows = [:]        // app/tool -> its last results window (Replace reuses it)
     Map<String, String> imageChoiceAtRun = [:]    // image parameter -> what was chosen when the run started
     Map<String, Node> wrappers = [:]             // the node placed in the form for each parameter (enabled_when disables this one)
+    Map<String, Label> helpMarkers = [:]          // the ⓘ of each parameter with a description (LcHelp)
     String lastCopied                              // the text the last Copy as command put on the clipboard (for tests)
     Map<String, CheckBox> selectionBoxes = [:]       // RegionOf: the 'use the selection' box of a region parameter
     Map<String, ComboBox<String>> imageBoxes = [:]
@@ -1210,7 +1211,7 @@ class LcDialog {
         lookups.forgetWaiting()
         formBox.children.clear()
         getters.clear(); setters.clear(); controls.clear(); wrappers.clear(); imageBoxes.clear(); areaBoxes.clear(); imageOf.clear(); selectionBoxes.clear(); links.clear(); fileFields.clear()
-        checks.clear(); choiceBoxes.clear(); channelBoxes.clear()
+        checks.clear(); choiceBoxes.clear(); channelBoxes.clear(); helpMarkers.clear()
         description.text = currentTool?.description ?: ""
         if (currentTool == null) return
         def unsupported = unsupportedParameter(currentTool)
@@ -1401,7 +1402,7 @@ class LcDialog {
         return grid
     }
 
-    /** One row per parameter (group headings between groups); the description becomes the label's tooltip. */
+    /** One row per parameter (group headings between groups); the description is the input's help: an ⓘ after the label (LcHelp). */
     void addRows(GridPane grid, List params, Map sources) {
         int row = 0
         String lastGroup = null
@@ -1414,12 +1415,8 @@ class LcDialog {
             }
             def label = new Label(p.label + (p.unit ? " (" + p.unit + ")" : ""))
             def node = makeControl(p, sources)
-            if (p.description) {
-                def tip = new Tooltip(p.description)
-                tip.wrapText = true
-                tip.maxWidth = LcConst.TOOLTIP_WIDTH
-                Tooltip.install(label, tip)
-            }
+            def marker = LcHelp.mark(label, node, p.description)
+            if (marker != null) helpMarkers[p.name as String] = marker
             grid.add(label, 0, row)
             grid.add(node, 1, row++)
         }

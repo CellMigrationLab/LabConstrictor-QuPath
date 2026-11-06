@@ -7,3 +7,4 @@ LcRunIdentity.groovy
 LcWorkers.groovy
 LcAppHosts.groovy
 LcCsv.groovy
+LcHelp.groovy
