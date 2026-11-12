@@ -2688,11 +2688,11 @@ class LcDialog {
         def xs = found.xs.collect { LcArea.slideX(area, (it as double) + 0.5d) }
         def name = appName + ":" + r.name
         def hierarchy = data.hierarchy
-        def previous = hierarchy.annotationObjects.findAll { it.name == name }
+        def previous = hierarchy.annotationObjects.findAll { LcRun.ownedBy(it, appName, r.name as String) { a -> a.name == name } }   // only what a run drew for this output
         if (previous && LcRun.toolOf(this).outputs.any { it.name == r.name && it.replace }) hierarchy.removeObjects(previous, true)   // Replace()
         def obj = PathObjects.createAnnotationObject(ROIs.createPointsROI(xs as double[], ys as double[], placementPlane(area)))
         obj.name = name
-        runSnapshot?.tag(obj)             // the run id, app and tool of THIS run (SPEC 4.5)
+        runSnapshot?.tag(obj, r.name as String)             // the run id, app and tool of THIS run (SPEC 4.5), and the output Replace() matches
         hierarchy.addObject(obj)
         return xs.size() + " point(s) added to the open image as the annotation '" + name + "'." + offsetNote(area)
     }
@@ -2707,7 +2707,7 @@ class LcDialog {
     /** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) become annotations of classification "<app>:<output>",
      *  named "<app>:<output> <label>" when there are at most LcConst.MAX_NAMED_SHAPES of them, on the image they were found in (when that was the
      *  image open in QuPath); holes and parts are kept; numeric properties become measurements. Replace() removes the previous annotations of
-     *  this output (by name or classification). */
+     *  this output: those a run tagged with this app and output (LcRun.ownedBy), never an annotation of the person's own that shares the name or class. */
     String placeShapes(String appName, Map r) {
         def data = openImageFor(r)
         if (data == null)
@@ -2723,14 +2723,15 @@ class LcDialog {
         def hierarchy = data.hierarchy
         def replacing = LcRun.toolOf(this).outputs.any { it.name == r.name && it.replace }
         if (replacing) {
-            def previous = hierarchy.annotationObjects.findAll { it.name?.startsWith(prefix + " ") || it.pathClass?.toString() == built.pathClass?.toString() }
+            def legacy = { a -> a.name?.startsWith(prefix + " ") || a.pathClass?.toString() == built.pathClass?.toString() }   // drawn before the output tag existed
+            def previous = hierarchy.annotationObjects.findAll { LcRun.ownedBy(it, appName, r.name as String, legacy) }
             if (previous) hierarchy.removeObjects(previous, true)       // Replace()
         }
-        objects.each { runSnapshot?.tag(it) }
+        objects.each { runSnapshot?.tag(it, r.name as String) }
         hierarchy.addObjects(objects)
         def text = objects.size() <= LcConst.MAX_NAMED_SHAPES
             ? objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>' (classification '" + built.pathClass + "')."
-            : objects.size() + " outline(s) added to the open image as annotations of classification '" + built.pathClass + "', without names so that they do not cover the image (the label is a measurement)."
+            : objects.size() + " outline(s) added to the open image as annotations of classification '" + built.pathClass + "', without names so that they do not cover the image (their label is a measurement, or the measurement outline_index when they have none)."
         if (total > LcConst.MAX_SHAPES) text += " '" + r.name + "': showing the first " + LcConst.MAX_SHAPES + " of " + total + " outlines."
         if (holes) text += " " + holes + " outline(s) have holes (kept)."
         text += offsetNote(area)
@@ -2759,7 +2760,8 @@ class LcDialog {
             if (named) obj.name = prefix + " " + (label != null ? label : objects.size() + 1)
             obj.pathClass = pathClass                                                                    // one classification per output: count, colour and select them together
             feature.get("properties")?.each { k, v -> if (v instanceof Number) obj.measurementList.put(k.toString(), v as double) }   // numeric properties become measurements
-            if (label == null && !named) obj.measurementList.put("label", (objects.size() + 1) as double)   // without a name the outline's number stays readable
+            if (label != null && !(label instanceof Number)) obj.metadata.put("label", label.toString())   // a text label is not a measurement: kept as metadata, so it survives without a name
+            if (label == null) obj.measurementList.put("outline_index", (objects.size() + 1) as double)   // the outline's position in the result; never called "label", which would claim a match with a label image
             objects << obj
         }
         return [objects: objects, holes: holes, pathClass: pathClass]
