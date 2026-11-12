@@ -59,6 +59,7 @@ Thread.start("lc-gui-test") {
         def found = annotations()
         expect("one_annotation_per_blob", found.size() == 4, found*.name)
         expect("names_carry_the_label", found.any { it.name == "interactions:outlines 1" }, found*.name)
+        expect("one_classification_per_output", found.every { it.pathClass?.toString() == qupath.lib.objects.classes.PathClass.fromString("interactions:outlines").toString() }, found*.pathClass)
         expect("measurements_from_properties", found.every { it.getMeasurementList().getMeasurementNames().containsAll(["area", "label"]) }, found.collect { it.getMeasurementList().getMeasurementNames() })
         def ring = found.find { it.getMeasurementList().get("area") > 300 }
         expect("hole_is_kept", ring != null && ring.getROI().getArea() < 20 * 20 - 40, ring?.getROI()?.getArea())

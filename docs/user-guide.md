@@ -28,7 +28,7 @@ Choose **Extensions > LabConstrictor tools...**, pick an app and a tool, and pre
 
 - An image input can be the image open in QuPath, any image of the open project, or a file.
 - For large images, choose the **Image area**: the whole image, the selected annotations, or the current viewport. Results come back on the right place of the slide.
-- Points and outlines found in the open image become annotations named after the app and the output.
+- Points and outlines found in the open image become annotations named after the app and the output. Outlines also get the classification `<app>:<output>`; above 50 outlines they get no names (QuPath would draw every name over the image) and are found by their classification, with their label as a measurement.
 - Results open in a window. Cancel stops a run.
 
 ## If something does not work

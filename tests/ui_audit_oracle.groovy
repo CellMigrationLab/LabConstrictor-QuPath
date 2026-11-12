@@ -165,7 +165,7 @@ List<String> uaPlacementProblems(Object dlg, String app, Map outcome, String ope
     List<Map> results = (List<Map>) (((Map) outcome.outputs)?.results ?: [])
     results.findAll { it.type in ["points", "shapes"] }.each { Map r ->
         String prefix = app + ":" + r.name
-        List objs = (List) UiAudit.fx { new ArrayList(data.hierarchy.annotationObjects).findAll { it.name == prefix || it.name?.startsWith(prefix + " ") } }
+        List objs = (List) UiAudit.fx { new ArrayList(data.hierarchy.annotationObjects).findAll { it.name == prefix || it.name?.startsWith(prefix + " ") || (r.type == "shapes" && it.pathClass?.toString() == qupath.lib.objects.classes.PathClass.fromString(prefix).toString()) } }
         if (r.type == "points") {
             List<String> lines = new File(r.path as String).readLines("UTF-8")
             List<String> head = lines[0].split(",") as List
