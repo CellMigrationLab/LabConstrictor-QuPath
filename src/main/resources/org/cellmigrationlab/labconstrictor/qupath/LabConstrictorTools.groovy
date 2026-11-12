@@ -49,6 +49,7 @@ import java.util.concurrent.TimeUnit
 class LcConst {
     // limits (what is shown, kept or accepted)
     static final int MAX_SHAPES = 50000                  // outlines added to the image; the message says how many were left out (same limit as the Python reference, shapes.MAX_LABELS_HINT)
+    static final int MAX_NAMED_SHAPES = 50               // above this many outlines the annotations get no name (QuPath draws every name on the image, which hides a segmentation of hundreds of objects); the classification <app>:<output> and the label measurement still identify them
     static final int MAX_REGION_OBJECTS = 65535          // annotations in a RegionOf selection: labels of the region image (16 bit)
     static final long MAX_REGION_PIXELS = 100_000_000L   // pixels of the image a RegionOf selection is painted on (the label image is held in memory)
     static final long MAX_EXPORT_PIXELS = 100_000_000L   // pixels (width x height of one plane) the host exports to a tool from an image; above this the run is refused (override: system property below)
@@ -1397,6 +1398,7 @@ class LcDialog {
         grid.vgap = LcConst.FORM_VGAP
         grid.padding = new Insets(4)
         def c0 = new ColumnConstraints(), c1 = new ColumnConstraints()
+        c0.minWidth = Region.USE_PREF_SIZE                   // the labels never shrink: with a wide control (an image row) JavaFX would otherwise keep only the label's ⓘ graphic and drop its text
         c1.hgrow = Priority.ALWAYS
         grid.columnConstraints.addAll(c0, c1)
         return grid
@@ -2702,9 +2704,10 @@ class LcDialog {
         return l
     }
 
-    /** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) become annotations named "<app>:<output> <label>"
-     *  on the image they were found in (when that was the image open in QuPath); holes and parts are kept; numeric properties become
-     *  measurements. Replace() removes the previous annotations of this output. */
+    /** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) become annotations of classification "<app>:<output>",
+     *  named "<app>:<output> <label>" when there are at most LcConst.MAX_NAMED_SHAPES of them, on the image they were found in (when that was the
+     *  image open in QuPath); holes and parts are kept; numeric properties become measurements. Replace() removes the previous annotations of
+     *  this output (by name or classification). */
     String placeShapes(String appName, Map r) {
         def data = openImageFor(r)
         if (data == null)
@@ -2720,12 +2723,14 @@ class LcDialog {
         def hierarchy = data.hierarchy
         def replacing = LcRun.toolOf(this).outputs.any { it.name == r.name && it.replace }
         if (replacing) {
-            def previous = hierarchy.annotationObjects.findAll { it.name?.startsWith(prefix + " ") }
+            def previous = hierarchy.annotationObjects.findAll { it.name?.startsWith(prefix + " ") || it.pathClass?.toString() == built.pathClass?.toString() }
             if (previous) hierarchy.removeObjects(previous, true)       // Replace()
         }
         objects.each { runSnapshot?.tag(it) }
         hierarchy.addObjects(objects)
-        def text = objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>'."
+        def text = objects.size() <= LcConst.MAX_NAMED_SHAPES
+            ? objects.size() + " outline(s) added to the open image as annotations named '" + prefix + " <label>' (classification '" + built.pathClass + "')."
+            : objects.size() + " outline(s) added to the open image as annotations of classification '" + built.pathClass + "', without names so that they do not cover the image (the label is a measurement)."
         if (total > LcConst.MAX_SHAPES) text += " '" + r.name + "': showing the first " + LcConst.MAX_SHAPES + " of " + total + " outlines."
         if (holes) text += " " + holes + " outline(s) have holes (kept)."
         text += offsetNote(area)
@@ -2737,6 +2742,8 @@ class LcDialog {
         def factory = new org.locationtech.jts.geom.GeometryFactory()
         def ring = { List points -> factory.createLinearRing(points.collect { new org.locationtech.jts.geom.Coordinate(LcArea.slideX(area, (it[0] as double) + 0.5d), LcArea.slideY(area, (it[1] as double) + 0.5d)) } as org.locationtech.jts.geom.Coordinate[]) }   // pixel centres, moved by the Image area's offset
         def objects = [], holes = 0
+        def pathClass = qupath.lib.objects.classes.PathClass.fromString(prefix)
+        boolean named = Math.min(collection.features.size(), LcConst.MAX_SHAPES) <= LcConst.MAX_NAMED_SHAPES
         for (feature in collection.features) {
             if (objects.size() >= LcConst.MAX_SHAPES) break
             def geometry = feature.geometry
@@ -2749,11 +2756,13 @@ class LcDialog {
             def obj = PathObjects.createAnnotationObject(qupath.lib.roi.GeometryTools.geometryToROI(shape, plane ?: LcArea.plane(area)))
             def label = feature.get("properties")?.get("label")   // .get(): on a map, Groovy's feature.properties and feature["properties"] give the bean properties, not the JSON key
             if (label instanceof Number && (label as double) == Math.floor(label as double)) label = (label as double).longValue()      // Gson reads every number as a double: 1.0 -> 1
-            obj.name = prefix + " " + (label != null ? label : objects.size() + 1)
+            if (named) obj.name = prefix + " " + (label != null ? label : objects.size() + 1)
+            obj.pathClass = pathClass                                                                    // one classification per output: count, colour and select them together
             feature.get("properties")?.each { k, v -> if (v instanceof Number) obj.measurementList.put(k.toString(), v as double) }   // numeric properties become measurements
+            if (label == null && !named) obj.measurementList.put("label", (objects.size() + 1) as double)   // without a name the outline's number stays readable
             objects << obj
         }
-        return [objects: objects, holes: holes]
+        return [objects: objects, holes: holes, pathClass: pathClass]
     }
 
     // ---- previews and tables of results
