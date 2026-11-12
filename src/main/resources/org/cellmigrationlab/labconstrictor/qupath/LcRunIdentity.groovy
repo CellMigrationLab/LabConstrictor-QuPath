@@ -28,6 +28,7 @@ class LcRun {
     static final String META_RUN_ID = "labconstrictor.run_id"                // metadata of every annotation drawn by a run
     static final String META_APP = "labconstrictor.app"
     static final String META_TOOL = "labconstrictor.tool"
+    static final String META_OUTPUT = "labconstrictor.output"           // the output (result name) an annotation belongs to: Replace() matches on it, never on the editable name or class
     /** Test hook (tests only): called with a stage name ("export") on the run thread, so a test can change the viewer or the selection at that point of a real run. */
     static volatile Closure<Object> barrier = null
 
@@ -113,11 +114,25 @@ class LcRun {
         return template.replace("{run_id}", runId).replace("{source}", source.name).replace("{path}", resultsPath)
     }
 
-    /** Puts the run's identity on an annotation it draws (4.5): the run id, and the app and tool of THIS run, not of whatever the form shows later. */
-    void tag(qupath.lib.objects.PathObject annotation) {
+    /** Puts the run's identity on an annotation it draws (4.5): the run id, and the app and tool of THIS run, not of whatever the form shows later; with
+     *  *output*, also the result it belongs to, which is what Replace() matches. */
+    void tag(qupath.lib.objects.PathObject annotation, String output = null) {
         annotation.metadata.put(META_RUN_ID, runId)
         annotation.metadata.put(META_APP, appName)
         annotation.metadata.put(META_TOOL, toolId)
+        if (output != null) annotation.metadata.put(META_OUTPUT, output)
+    }
+
+    /** True for an annotation a LabConstrictor run drew for *output* of *appName*: what Replace() may remove. Ownership comes from the metadata tag(), never
+     *  from the name or the classification alone, which the person can give their own annotations too. Annotations drawn before the output tag existed are
+     *  recognised only when they carry this app's run tag and still have the name or class the extension gave them (*legacy*); annotations without any
+     *  LabConstrictor tag are never removed, except results of versions that predate run tags, which carried the name "<app>:<output>" or "<app>:<output> <n>". */
+    static boolean ownedBy(qupath.lib.objects.PathObject annotation, String appName, String output, Closure<Boolean> legacy) {
+        def meta = annotation.metadata
+        if (meta[META_OUTPUT] != null) return meta[META_APP] == appName && meta[META_OUTPUT] == output
+        if (meta[META_RUN_ID] != null) return meta[META_APP] == appName && legacy(annotation)
+        def name = appName + ":" + output
+        return annotation.name == name || annotation.name?.startsWith(name + " ")
     }
 
     /** The tool the results of the dialog's last run belong to: the one the run was started for (frozen with it), not whatever the form shows now (4.5). */

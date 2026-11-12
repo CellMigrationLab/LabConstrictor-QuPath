@@ -65,8 +65,32 @@ Thread.start("lc-gui-test") {
         expect("hole_is_kept", ring != null && ring.getROI().getArea() < 20 * 20 - 40, ring?.getROI()?.getArea())
         expect("annotations_are_on_the_blob", found.every { it.ROI.boundsX >= 0 && it.ROI.boundsX < 80 && it.ROI.boundsY >= 0 && it.ROI.boundsY < 60 }, found.collect { [it.ROI.boundsX, it.ROI.boundsY] })
         shot("qp_shapes_1_after", dlg.stage)
+        expect("results_carry_their_output", found.every { it.metadata["labconstrictor.output"] == "outlines" && it.metadata["labconstrictor.app"] == "interactions" }, found*.metadata)
+        // Ownership (audit Q1, Q3): an annotation of the person's own with the same class survives Replace; a result the person reclassified is still replaced.
+        def outlinesClass = qupath.lib.objects.classes.PathClass.fromString("interactions:outlines")
+        def mine = fx {
+            def a = PathObjects.createAnnotationObject(ROIs.createRectangleROI(1, 1, 5, 5, ImagePlane.getDefaultPlane()))
+            a.pathClass = outlinesClass; a.name = "my own"; qupath.imageData.hierarchy.addObject(a); a
+        }
+        def reclassified = found[0]
+        fx { reclassified.pathClass = qupath.lib.objects.classes.PathClass.fromString("Tumor"); reclassified.name = null }
         fx { dlg.run() }; Thread.sleep(1500); waitIdle(dlg, 120)
+        def all = fx { new ArrayList(qupath.imageData.hierarchy.annotationObjects) }
         expect("replace_leaves_one_set", annotations().size() == 4, annotations()*.name)
+        expect("replace_keeps_the_persons_annotation_of_the_same_class", all.contains(mine), all*.name)
+        expect("replace_removes_a_reclassified_result", !all.contains(reclassified), all.collect { [it.name, it.pathClass] })
+        // Above 50 outlines (audit Q2): no names, no invented "label"; the position is outline_index; a text label is kept.
+        def square = { int i -> [type: "Feature", geometry: [type: "Polygon", coordinates: [[[i, 0], [i + 1, 0], [i + 1, 1], [i, 1], [i, 0]]]], properties: [:]] }
+        def built50 = fx { dlg.shapeAnnotations([features: (0..<50).collect { square(it * 2) }], "x:y") }
+        def features51 = (0..<51).collect { square(it * 2) }
+        features51[0].put("properties", [label: "cell A"])
+        features51[1].put("properties", [label: 7.0d])
+        def built51 = fx { dlg.shapeAnnotations([features: features51], "x:y") }
+        expect("exactly_50_outlines_are_named", built50.objects.every { it.name != null }, built50.objects*.name.take(3))
+        expect("51_outlines_are_not_named", built51.objects.every { it.name == null }, built51.objects*.name.take(3))
+        expect("a_text_label_is_kept_as_metadata", built51.objects[0].metadata["label"] == "cell A" && !built51.objects[0].measurementList.containsKey("label"), built51.objects[0].metadata)
+        expect("a_numeric_label_stays_the_label_measurement", built51.objects[1].measurementList.get("label") == 7.0d && !built51.objects[1].measurementList.containsKey("outline_index"), built51.objects[1].measurementList.getMeasurementNames())
+        expect("no_label_gives_outline_index_not_label", built51.objects[2].measurementList.get("outline_index") == 3.0d && !built51.objects[2].measurementList.containsKey("label"), built51.objects[2].measurementList.getMeasurementNames())
     } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
     finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }
 }
