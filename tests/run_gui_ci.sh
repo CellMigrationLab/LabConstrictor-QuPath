@@ -31,12 +31,14 @@ for b in area buttons channel copy fallbacks interactions region run_button shap
 for b in parity_form parity_host parity_lifecycle parity_messages parity_pixel parity_results parity_support parity_quote; do needs[gui_test_${b}_body.groovy]="interactions"; done
 needs[gui_test_parity_cancel_body.groovy]="LabConstrictorPlayground interactions"
 needs[gui_test_app_hosts_body.groovy]="interactions"
+needs[gui_test_host_requirements_body.groovy]="interactions"
 needs[gui_test_help_body.groovy]="interactions runs"
 # bodies that write their own registry and results (they empty LC_HOME first, so each gets a scratch LC_HOME named as the body asserts; the registered apps stay in LC_SHARED_HOME)
 declare -A scratch=([gui_test_parity_trust_body.groovy]=lhome_trust [gui_test_parity_form_body.groovy]=lhome_form [gui_test_parity_host_body.groovy]=lhome_host
   [gui_test_parity_lifecycle_body.groovy]=lhome_life [gui_test_parity_pixel_body.groovy]=lhome_pixel [gui_test_parity_support_body.groovy]=lhome_support
   [gui_test_retention_body.groovy]=lhome_retention [gui_test_identity_body.groovy]=lhome_identity
-  [gui_test_numbers_body.groovy]=lhome_numbers [gui_test_async_body.groovy]=lhome_async [gui_test_app_hosts_body.groovy]=lhome_hosts)
+  [gui_test_numbers_body.groovy]=lhome_numbers [gui_test_async_body.groovy]=lhome_async [gui_test_app_hosts_body.groovy]=lhome_hosts
+  [gui_test_host_requirements_body.groovy]=lhome_hostreq)
 SHARED_HOME="$LC_HOME"; export LC_SHARED_HOME="$SHARED_HOME"
 # bodies that are skipped (not failed) while their apps are not registered: the bridge of these two apps is not on their main branch yet
 optional="gui_test_body.groovy"
