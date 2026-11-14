@@ -261,7 +261,13 @@ void uaActivateImage(Object dlg, Map p, List<String> notes) {
         if (current) LcArea.CHOICES.each { String choice -> UiAudit.fx { area.value = choice; null }; uaAssert(UiAudit.fx { area.value } == choice, "the area '" + choice + "' was not taken") }
     }
     String fixture = new File(UiAudit.testsDir, "fixtures/blobs.tif").absolutePath
+    // apps keep fixtures in subfolders (the Playground: fixtures/data/three_channels.tif): look under fixtures/ at any depth
     File multi = new File(UiAudit.testsDir, "fixtures/three_channels.tif")
+    File fixturesDir = new File(UiAudit.testsDir, "fixtures")
+    if (!multi.isFile() && fixturesDir.isDirectory()) {
+        def found = java.nio.file.Files.walk(fixturesDir.toPath()).withCloseable { s -> s.filter { it.fileName.toString() == "three_channels.tif" }.sorted().findFirst().orElse(null) }
+        if (found != null) multi = found.toFile()
+    }
     uaTypeFile(box, file, (p.pick_channel && multi.isFile() ? multi.absolutePath : fixture))
     Map read = (Map) uaGet(dlg, name)
     uaAssert(read != null && read.file == (p.pick_channel && multi.isFile() ? multi.absolutePath : fixture), "the file typed for '" + name + "' reads back " + read)
