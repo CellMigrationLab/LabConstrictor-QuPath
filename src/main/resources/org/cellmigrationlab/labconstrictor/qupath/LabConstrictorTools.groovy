@@ -819,7 +819,10 @@ class LcRegistry {
         if (badSchema) return [problem: file.name + ": " + badSchema]
         Map<String, String> compat = LcCompat.check(schema as Map, LcCompat.MIN_TOOLS_VERSION, LcCompat.REQUIRED_FEATURES)      // what this host needs from the app's Tools (PROTOCOL.md, compatibility rules for hosts)
         if (compat.status == LcCompat.REFUSE) return [problem: entry.name + ": " + compat.reason, name: entry.name]
-        return [app: [entry: entry, schema: schema], name: entry.name] + (compat.status == LcCompat.WARN ? [warning: entry.name + ": " + compat.reason] : [:])
+        Map needs = LcHostRequirements.decide(entry as Map)      // PROTOCOL.md "Host requirements": is this plugin new enough for the app? (the sentence names the app itself)
+        if (needs.status == "refuse") return [problem: needs.sentence, name: entry.name]
+        List<String> said = (compat.status == LcCompat.WARN ? [entry.name + ": " + compat.reason] : []) + (needs.status == "warn" ? [needs.sentence as String] : [])
+        return [app: [entry: entry, schema: schema], name: entry.name] + (said ? [warning: said.join("; ")] : [:])
     }
 
     /** @return [apps: LinkedHashMap name -> [entry: Map, schema: Map], problems: List of "name: reason"] */
