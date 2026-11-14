@@ -201,6 +201,8 @@ void uaActivateNumber(Object dlg, Map p) {
     Spinner spinner = (Spinner) dlg.controls[name]
     boolean whole = p.type == "integer"
     double lo = p.minimum != null ? (p.minimum as double) : 0d, hi = p.maximum != null ? (p.maximum as double) : (p.default != null ? Math.max(2d * (p.default as double), 2d) : 10d)
+    // no maximum and a minimum above the guess (NucleiSky's 'Cellpose tile size': Min(64), no default): keep the range above the minimum
+    if (p.maximum == null && hi <= lo) hi = lo > 0d ? 2d * lo : lo + 10d
     double target = whole ? Math.floor(lo + (hi - lo) / 2d) : lo + (hi - lo) / 2d
     UiAudit.fx { LcDialog.setNumber(spinner, whole ? (Object) (long) target : (Object) target); null }
     uaAssert(Math.abs((uaGet(dlg, name) as double) - target) < 1e-9, "'" + name + "' set to " + target + " reads back " + uaGet(dlg, name))
