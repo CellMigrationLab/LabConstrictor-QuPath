@@ -2,7 +2,7 @@
 # NEGATIVE CONTROLS of the UI audit: each seeded failure must turn the audit red, with real output (docs/UI_AUDIT.md). Exit 0 only when every one was caught.
 #   QUPATH=<QuPath folder> LC_HOME=<registry with the test apps frame and runs, see docs/UI_AUDIT.md> [PYTHON=python3] [LC_RELEASE_DIR=...] tests/run_ui_audit_negative.sh [out dir]
 # Seeds: extra_control, removed_control (the window), blank_result (the results), a tool that fails, a worker that dies, a hung tool (ends by the watchdog), a launch killed by the outer watchdog, an app that
-# must not be listed but is. Run is activated by calling run() (LC_UI_RUN_VIA=call, see docs/UI_AUDIT.md "Bugs found"), the failures seeded here are about everything else.
+# must not be listed but is. Run is activated by calling run() (LC_UI_RUN_VIA=call), the failures seeded here are about everything else.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 : "${QUPATH:?set QUPATH}"; : "${LC_HOME:?set LC_HOME}"
