@@ -1,6 +1,6 @@
 # UI audit of the QuPath extension
 
-A driver that presses every control of the LabConstrictor window in QuPath, opens the form of every tool of an INSTALLED app, runs each tool with the inputs of the app's own `lc_tests/cases.json`, and takes screenshots. It is the QuPath part of section 3 of the Tools repository's `docs/TEST_STRATEGY.md` (section 0 for the one-off run). Linux, Xvfb.
+A driver that presses every control of the LabConstrictor window in QuPath, opens the form of every tool of an INSTALLED app, runs each tool with the inputs of the app's own `lc_tests/cases.json`, and takes screenshots. It is the QuPath part of the audit tooling described in the Tools repository's `tests/audit/README.md`. Linux, Xvfb.
 
 ## Run it (one app)
 

@@ -20,7 +20,7 @@ The extension runs the tools of every installed LabConstrictor app from QuPath, 
 
 Without the jar: download the **single file** `LabConstrictorTools-all.groovy` from the same release, open it in QuPath's Script Editor and run it. The Script Editor needs this all-in-one file; the script in the repository is split into part files that do not run on their own there.
 
-Full install page for the apps and all three hosts: [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md). To help test, follow the [human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) and fill in its [record sheet](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md#0-record-sheet-the-test-set-fill-in-before-you-start).
+Full install page for the apps and all three hosts: [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md). To help test, report what you find in the [issue tracker](https://github.com/CellMigrationLab/LabConstrictor-QuPath/issues).
 
 ## Open it
 

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------------------------------- number fields (SPEC_WRONG_SCIENCE section 6)
-/** A typed number this host refuses. The message is the whole sentence the person reads in the status line; for a limit it is the worker's template (HOST_PARITY I06,
+/** A typed number this host refuses. The message is the whole sentence the person reads in the status line; for a limit it is the worker's template (Tools docs/PROTOCOL.md,
  *  conformance messages.number_above_maximum and number_below_minimum): `'L' must be <= 9007199254740991`. Nothing is ever clamped to make it fit: the run does not start and
  *  nothing is sent. */
 class LcNumberError extends IllegalArgumentException {
