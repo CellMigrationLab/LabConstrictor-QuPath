@@ -1,5 +1,5 @@
 // ================================================================== UI audit, part 1: settings, matrix, guarded checks (joined in front of gui_test_ui_audit_body.groovy by tests/run_gui_test.sh, see gui_test_ui_audit_body.parts)
-// The driver of LabConstrictor-Tools docs/TEST_STRATEGY.md section 3, host `qupath`, one QuPath launch per phase (tests/run_ui_audit.sh). Every assertion runs in its own guarded block: an exception or a timeout is
+// The UI audit driver (LabConstrictor-Tools tests/audit/README.md), host `qupath`, one QuPath launch per phase (tests/run_ui_audit.sh). Every assertion runs in its own guarded block: an exception or a timeout is
 // `CHECK <id> FAIL <Type: message>` and the audit goes on. Every check rewrites <LC_SHOTS>/matrix_ui_qupath_<app>.json (temp file, then an atomic move): a crash or a kill leaves a complete record.
 // The expectations come from sources that are NOT the state asserted: the Tools CLI schema and the case files (plan_qupath_<app>.json, made by tests/ui_audit_matrix.py), the registry entry on disk,
 // the files a run writes, and the metadata of the fixture images read by QuPath's own readers.

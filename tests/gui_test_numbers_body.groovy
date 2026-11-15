@@ -1,4 +1,4 @@
-// ================================================================== GUI test body: number limits (SPEC_WRONG_SCIENCE section 6; NUM-01..05, HOST_PARITY A06, A07, I06)
+// ================================================================== GUI test body: number limits (Tools docs/SPEC_WRONG_SCIENCE.md section 6 and docs/PROTOCOL.md; NUM-01..05)
 // (appended to the tool script by tests/run_gui_test.sh). Needs the `runs` test app (tests/runs_app, registered by tests/ci_setup_apps.sh in LC_SHARED_HOME; copied into the scratch LC_HOME,
 // a folder named lhome_numbers). The tool `Numbers` reports what its request carried (the text of each number and its Python type), so a case checks the REAL request, not the box.
 // The limits and the sentences are read from conformance.json (limits.form_integer_max, limits.unbounded_float, messages.number_above_maximum / number_below_minimum, number_limits.cases);
