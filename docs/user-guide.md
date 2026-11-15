@@ -5,12 +5,12 @@ The extension runs the tools of every installed LabConstrictor app from QuPath, 
 > [!WARNING]
 > **Under heavy construction.** This plugin is untested and unlikely to be stable. Expect bugs, missing features and changes without notice. Do not rely on it for work you cannot redo.
 >
-> For QuPath 0.7 (tested with 0.7.0 on Linux; not tested on Windows or macOS). The jar is attached to each release; until the first release is published, build it from the repository.
+> For QuPath 0.7 (tested with 0.7.0 on Linux; Windows and macOS get informative checks in the release run, not tested by a person). The jar is attached to each release.
 
 ## What you need
 
 - [QuPath](https://qupath.github.io) 0.7.
-- At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the extension finds it. Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`); the rule is a binding rule in Tools 0.3.0a1 (feature `app_hosts_v1`; PROTOCOL.md section App hosts); Napari, Fiji and QuPath all honour it (this host since PR #35). Apps without a declaration, i.e. installed with an installer from before template 0.1.18, are listed in every host and the Log says so ("declares no hosts"); installers pass the hosts from template 0.1.18 (template PR #33, merged 14 Oct 2026); the current release of every app is built with it. Intended for QuPath: Playground, NucleiSky and Guess the Condition. **VLab4Mic is not listed in QuPath** (it is for Napari and Fiji), and CellTracksColab is not listed in any host.
+- At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the extension finds it. Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`). Apps without a declaration (installed with an older installer) are listed in every host and the Log says so ("declares no hosts"). Intended for QuPath: Playground, NucleiSky, Guess the Condition and StarDist2D. **VLab4Mic is not listed in QuPath** (it is for Napari and Fiji), and CellTracksColab is notebook-only.
 - Only to build the jar yourself: JDK 25 (QuPath 0.7 is built with Java 25), as described in the repository's README.
 
 ## Install
@@ -38,6 +38,7 @@ Choose **Extensions > LabConstrictor tools...**, pick an app and a tool, and pre
 - The app's `labconstrictor-tools` must be 0.3.0a1 or newer; with an older one the run is refused and the status line says to update it.
 - If you open another image while a tool runs, the results are not drawn on the new image: the status line says where the files are.
 - An app whose `labconstrictor-tools` is older than 0.3.0a1 is not offered; the status line (or the list of skipped apps after **Rescan apps**) says to update it.
+- An app can declare the oldest QuPath extension it needs. If yours is older, the status line warns and names the version to get; if the app marks it as required, the app is not offered (it is in the list of skipped apps) until you update the extension.
 - A number you type that is outside the allowed range (or is not a number) is refused with a sentence like `'Threshold' must be <= 10`; it is never changed to fit, and the run does not start.
 - `labconstrictor-tools doctor` shows which apps are registered.
 

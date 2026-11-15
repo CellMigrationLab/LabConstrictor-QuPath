@@ -6,7 +6,6 @@
 #   frame         tests/frame_app (a probe tool for the coordinate-frame tests: it reports what it received and returns a point, an outline and labels)
 #   runs          tests/runs_app (delayed, failing, crashing and number-reporting tools for the run-identity, retention and number-limit tests)
 #   LabConstrictorPlayground  the Playground app, from its main branch, with CPU PyTorch (its device test runs a real model on the CPU)
-# Not installed: CellTracksColab and NucleiSky (their bridge is not on their main branch yet, see tests/run_gui_ci.sh).
 set -euo pipefail
 WORK="$(mkdir -p "${1:?work dir}" && cd "$1" && pwd)"; REF="${2:-main}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"

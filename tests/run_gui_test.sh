@@ -15,7 +15,7 @@ if "labconstrictor-qupath" not in s:
 PY
 # the script is joined from the files listed in parts.txt (the same order the extension uses), then the test body is appended
 RES=src/main/resources/org/cellmigrationlab/labconstrictor/qupath
-BODY_FILE="${BODY:-gui_test_body.groovy}"; PARTS_FILE="tests/${BODY_FILE%.groovy}.parts"      # a body made of several files: tests/<body>.parts lists them, in order, to be joined in front of the body
+BODY_FILE="${BODY:?set BODY to the test body, a tests/gui_test_*_body.groovy file name}"; PARTS_FILE="tests/${BODY_FILE%.groovy}.parts"      # a body made of several files: tests/<body>.parts lists them, in order, to be joined in front of the body
 { if [ -n "${LC_EXTENSION_SCRIPT:-}" ]; then cat "$LC_EXTENSION_SCRIPT"; else while IFS= read -r part || [ -n "$part" ]; do [ -z "$part" ] || { cat "$RES/$part"; echo; }; done < "$RES/parts.txt"; fi
   if [ -f "$PARTS_FILE" ]; then while IFS= read -r shared || [ -n "$shared" ]; do [ -z "$shared" ] || { cat "tests/$shared"; echo; }; done < "$PARTS_FILE"; fi
   cat "tests/$BODY_FILE"; } > "${TMPDIR:-/tmp}/lc_gui_test.groovy"

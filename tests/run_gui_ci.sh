@@ -3,8 +3,7 @@
 # fails when any body fails. Used by .github/workflows/qupath-gui.yml; works locally too:
 #   QUPATH=/path/to/QuPath LC_HOME=<registry> tests/run_gui_ci.sh [body.groovy ...]     (logs and screenshots in $LOGS, default gui-logs/)
 # A body FAILS when QuPath exits non-zero, a line "FAIL ..." is printed, the body never printed its RESULTS/SUMMARY line (a crash or a
-# hang past the timeout), or it printed no PASS at all. A body is SKIPPED, with the reason printed, only when an app it needs is not
-# registered in $LC_HOME and is listed in needs_optional_apps below; a missing app for any other body is a failure.
+# hang past the timeout), or it printed no PASS at all, or an app it needs is not registered in $LC_HOME.
 # The UI audit gui_test_ui_audit_body.groovy (tests/run_ui_audit.sh, docs/UI_AUDIT.md) is not part of the default run either: named on the command line it starts tests/run_ui_audit.sh and needs its environment.
 # The sandbox driver gui_test_listing_body.groovy is not part of the default run (it needs LC_EXPECT_* variables, tests/run_listing_matrix.sh gives them); named on the command line it
 # PASSES only when it exits 0 and prints exactly one `CHECK qupath_lists_the_app PASS ...` or `CHECK qupath_does_not_list_the_app PASS ...` line (the contract of the release sandbox).
@@ -16,7 +15,6 @@ TIMEOUT="${BODY_TIMEOUT:-900}"
 
 # body -> apps it needs (registered in $LC_HOME/apps/<name>.json)
 declare -A needs=(
-  [gui_test_body.groovy]="CellTracksColab NucleiSky"
   [gui_test_adversarial_body.groovy]="adv"
   [gui_test_playground_body.groovy]="LabConstrictorPlayground"
   [gui_test_frame_body.groovy]="frame"
@@ -40,9 +38,6 @@ declare -A scratch=([gui_test_parity_trust_body.groovy]=lhome_trust [gui_test_pa
   [gui_test_numbers_body.groovy]=lhome_numbers [gui_test_async_body.groovy]=lhome_async [gui_test_app_hosts_body.groovy]=lhome_hosts
   [gui_test_host_requirements_body.groovy]=lhome_hostreq)
 SHARED_HOME="$LC_HOME"; export LC_SHARED_HOME="$SHARED_HOME"
-# bodies that are skipped (not failed) while their apps are not registered: the bridge of these two apps is not on their main branch yet
-optional="gui_test_body.groovy"
-skip_reason="CellTracksColab and NucleiSky have no labconstrictor_tools bridge (celltracks_lc_tools / nucleisky_lc_tools) on their main branch yet, so they cannot be installed from a release or main; register them in LC_HOME to run this body"
 
 if [ $# -gt 0 ]; then bodies=("$@"); else bodies=($(cd tests && ls gui_test_*body.groovy | grep -v -e '^gui_test_listing_body.groovy$' -e '^gui_test_ui_audit_body.groovy$')); fi
 fail=0; rows=()
@@ -57,9 +52,6 @@ for body in "${bodies[@]}"; do
   missing=""
   for app in ${needs[$body]:-}; do [ -f "$SHARED_HOME/apps/$app.json" ] || missing="$missing $app"; done
   if [ -n "$missing" ]; then
-    if [[ " $optional " == *" $body "* ]]; then
-      echo "SKIP $body: app(s) not registered:$missing. $skip_reason" | tee "$log"; rows+=("| $body | SKIPPED | $skip_reason |"); continue
-    fi
     echo "FAIL $body: app(s) not registered in $SHARED_HOME/apps:$missing" | tee "$log"; rows+=("| $body | FAILED | app(s) not registered:$missing |"); fail=1; continue
   fi
   echo "=== $body"

@@ -10,7 +10,7 @@ The audit runs one QuPath launch per phase (see tests/run_ui_audit.sh). This scr
     killed    a QuPath launch was killed by the watchdog: every expected id of that phase that has no row yet gets a FAIL row
     finish    the controls check from the side files of the launches, NOT_RUN rows for every expected id without a row, the summary; exit status 1 on any FAIL or NOT_RUN
 
-Matrix `<shots>/matrix_ui_qupath_<app>.json` (the schema of LabConstrictor-Tools tests/oneoff_2026-10/matrix.py): {host, app, family "ui", started, finished|null, expected (count),
+Matrix `<shots>/matrix_ui_qupath_<app>.json` (the schema of LabConstrictor-Tools tests/audit/matrix.py): {host, app, family "ui", started, finished|null, expected (count),
 rows: [{id, family, host, app, tool, control, status PASS|FAIL|NOT_RUN|HUMAN|NOTE, detail, seconds, screenshot, ts}]}, rewritten atomically after every row. A line `CHECK <id> PASS|FAIL <detail>` (one line, at most 500 characters)
 or `NOTE <id> not run: <reason>` is printed for every row this script adds.
 """

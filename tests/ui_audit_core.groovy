@@ -14,7 +14,7 @@ import javafx.embed.swing.SwingFXUtils
 import javafx.stage.Stage
 import javafx.stage.Window
 
-/** The matrix of one app, schema of LabConstrictor-Tools tests/oneoff_2026-10/matrix.py: {host, app, family, started, finished, expected, rows[{id, family, host, app, tool, control, status, detail, seconds, screenshot, ts}]}.
+/** The matrix of one app, schema of LabConstrictor-Tools tests/audit/matrix.py: {host, app, family, started, finished, expected, rows[{id, family, host, app, tool, control, status, detail, seconds, screenshot, ts}]}.
  *  Rows are appended by every launch (the file made by tests/ui_audit_matrix.py is read back at the start) and the file is rewritten after every row. Status: PASS, FAIL, NOT_RUN (expected, not executed: red),
  *  HUMAN (not automatable: listed for a person, never green), NOTE (information, never green). */
 class UaMatrix {

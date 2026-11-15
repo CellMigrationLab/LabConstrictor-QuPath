@@ -1,6 +1,6 @@
-# LabConstrictor-QuPath (prototype)
+# LabConstrictor-QuPath
 
-Runs the tools of every installed LabConstrictor app (apps meant for QuPath: Playground, NucleiSky, Guess the Condition) from **Extensions > LabConstrictor tools...** in
+Runs the tools of every installed LabConstrictor app (apps meant for QuPath: Playground, NucleiSky, Guess the Condition, StarDist2D) from **Extensions > LabConstrictor tools...** in
 QuPath 0.7. The form is generated from the tool's declared schema ([LabConstrictor-Tools](https://github.com/CellMigrationLab/LabConstrictor-Tools),
 `docs/PROTOCOL.md`); the tool runs in the app's own Python environment through the LabConstrictor worker (JSON lines on stdin/stdout),
 so QuPath never imports the app's packages and needs no Python of its own. Same idea as the Napari and Fiji front-ends.
@@ -12,7 +12,7 @@ so QuPath never imports the app's packages and needs no Python of its own. Same 
 
 For scripters, a second way that needs no jar: download the **single file** `LabConstrictorTools-all.groovy` from the same release (the whole script in one file), open it in QuPath's Script Editor and run it. This all-in-one file is what the Script Editor needs: the script in the repository is split into the part files listed in `parts.txt`, and those do not run on their own in the Script Editor (the jar joins them itself).
 
-Install page for the apps and all three hosts: [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md). Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`); the rule is a binding rule in Tools 0.3.0a1 (feature `app_hosts_v1`; PROTOCOL.md section App hosts); Napari, Fiji and QuPath all honour it (this host since PR #35). Apps without a declaration, i.e. installed with an installer from before template 0.1.18, are listed in every host and the Log says so ("declares no hosts"); installers pass the hosts from template 0.1.18 (template PR #33, merged 14 Oct 2026); the current release of every app is built with it. Intended for QuPath: Playground, NucleiSky and Guess the Condition. **VLab4Mic is not listed in QuPath** (it is for Napari and Fiji), and CellTracksColab is not listed in any host. Testing: the [human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) and its [record sheet](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md#0-record-sheet-the-test-set-fill-in-before-you-start).
+Install page for the apps and all three hosts: [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md). Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`; Tools feature `app_hosts_v1`, PROTOCOL.md section App hosts). Apps without a declaration (installed with an older installer) are listed in every host and the Log says so ("declares no hosts"). Intended for QuPath: Playground, NucleiSky, Guess the Condition and StarDist2D. **VLab4Mic is not listed in QuPath** (it is for Napari and Fiji), and CellTracksColab is notebook-only. Testing: the [human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) and its [record sheet](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md#0-record-sheet-the-test-set-fill-in-before-you-start).
 
 Every release lists the QuPath version it was built against and the minimum Tools version in its notes; `SHA256SUMS` holds the checksums of the files.
 
@@ -82,6 +82,9 @@ Every app is checked when the registry is read (start, **Rescan apps**), against
 * an app whose version text is not understood is offered with a warning in the status line;
 * a run is checked again when Run is pressed (an app registered after the window opened is checked at the next Rescan; the run check is the last line).
 
+## Host requirements (docs/PROTOCOL.md, "Host requirements"; feature `host_requirements_v1`)
+An app can declare the oldest QuPath extension it needs (`host_requirements` in its registry entry). `LcHostRequirements` is the Groovy port of `labconstrictor_tools.host_requirements.check`, with the same sentences, and runs when the registry is read: when this extension is older, the app stays listed and the sentence is shown as a warning in the status line; when the app marks the requirement `required: true`, the app is not offered and the sentence is in the "skipped" list. The vectors are the `host_requirements` section of `conformance.json` (`tests/gui_test_host_requirements_body.groovy`).
+
 ## Which apps this host lists (docs/PROTOCOL.md, "App hosts"; feature `app_hosts_v1`)
 A registry entry may declare `hosts` (a list of `notebook`, `napari`, `fiji`, `qupath`; the app's `labconstrictor-app.yaml` says it, `register --app-manifest` copies it). QuPath lists an app only if the rule says so: `LcAppHosts` is the Groovy port of `labconstrictor_tools.app_hosts.listed_for(entry, "qupath")`, with the same sentences. It runs when the registry is read, after the trust checks:
 * `qupath` is in `hosts`: listed, nothing to say;
@@ -91,7 +94,7 @@ A registry entry may declare `hosts` (a list of `notebook`, `napari`, `fiji`, `q
 The command line and the notebooks are never filtered. The vectors are the `app_hosts` section of `conformance.json` (`tests/gui_test_app_hosts_body.groovy` runs them and FAILS when the section is missing). The release sandbox runs the driver `tests/gui_test_listing_body.groovy` (environment `LC_HOME`, `LC_EXPECT_APP`, `LC_EXPECT_LISTED`, `LC_EXPECT_SENTENCE`; it prints one `CHECK qupath_lists_the_app` or `CHECK qupath_does_not_list_the_app` line); the `qupath-gui` job runs it for the app matrix with `tests/run_listing_matrix.sh` (Playground, NucleiSky, GuessTheCondition: listed; VLab4Mic and CellTracksColab: not listed).
 
 ## Dynamic choices and the worker (SPEC_WRONG_SCIENCE section 5)
-A `ChoicesFrom` parameter is a dropdown filled by another tool of the app. Before this, one thread per parameter shared one unlocked worker field, and a late answer of another form could fill the dropdown of the form shown now. Now:
+A `ChoicesFrom` parameter is a dropdown filled by another tool of the app:
 * **Identity of a lookup.** Each question is `(form generation, app, tool, parameter, the values it depends on, request id)`. The generation is process-wide and never reset (it grows whenever a form is built or destroyed); the request id is per window and never reset. An answer is applied **only if all of these still hold** when it arrives (the dependencies are recomputed then, not remembered); otherwise it is dropped, with its error and its tooltip. A tool or app switched while a lookup is out can therefore never put its choices (or its error) on the new form.
 * **A dependency change invalidates at once.** The moment a value the dropdown depends on changes, its choices are marked pending (the dropdown is replaced by the text field with the tooltip "waiting for the choices...") and every older question of it is stale; only the new question waits for the 400 ms pause in the typing.
 * **Bounded work.** One lookup in flight per window (one thread, no thread per lookup); waiting questions are coalesced (one slot per parameter, a newer one replaces an older one that has not started); at most 8 wait, the oldest is dropped and logged; a lookup that takes longer than 60 s is ended with its worker (shortened for tests with `-Dlc.qupath.lookup_timeout_s`; the status says `... did not answer within N s`). These three numbers are `status: default` (not yet confirmed) in `conformance.json`.
@@ -101,7 +104,7 @@ A `ChoicesFrom` parameter is a dropdown filled by another tool of the app. Befor
 ## Number limits (SPEC_WRONG_SCIENCE section 6)
 * A whole-number box accepts ±(2^53 - 1) = ±9007199254740991 (`conformance.json` `limits.form_integer_max`) and a decimal box ±1e15 (`limits.unbounded_float`) when the tool declares no `Min` / `Max`; a declared bound is used as declared (a whole-number bound beyond 2^53 - 1 is cut to it).
 * **The text in the box is the value.** A whole number is read as an exact integer (no double ever holds it), a decimal number is compared with the limits as its exact decimal text (so `1.0000000000000002e15` and even `1.00000000000000001e15` are beyond 1e15), and the request carries exactly what was typed (`9007199254740991` stays `9007199254740991`). Surrounding spaces are not part of the number; `+5` and `007` are 5 and 7.
-* **Beyond a limit is refused, never clamped.** A number outside the limits (default or declared) starts no run and sends nothing: the status line says `'L' must be <= 9007199254740991` / `'L' must be >= -9007199254740991` (the worker's templates, `conformance.json` `messages.number_above_maximum` / `number_below_minimum`; a decimal limit is written the Python way, `'L' must be <= 1000000000000000.0`; a declared Max of 10 gives `'L' must be <= 10`). The typed text stays in the box, so what is refused is what is seen. This is said when the box loses focus or Enter is pressed, and again when Run is pressed. The arrows stop at the limits and never change typed text. Before this the box put a typed number at the nearest limit, so a typed 9007199254740993 was sent as 9007199254740991 and a declared Max of 10 turned 11 into 10.
+* **Beyond a limit is refused, never clamped.** A number outside the limits (default or declared) starts no run and sends nothing: the status line says `'L' must be <= 9007199254740991` / `'L' must be >= -9007199254740991` (the worker's templates, `conformance.json` `messages.number_above_maximum` / `number_below_minimum`; a decimal limit is written the Python way, `'L' must be <= 1000000000000000.0`; a declared Max of 10 gives `'L' must be <= 10`). The typed text stays in the box, so what is refused is what is seen. This is said when the box loses focus or Enter is pressed, and again when Run is pressed. The arrows stop at the limits and never change typed text.
 * Text that is not a number is refused too: `'L': '12x' is not a number`, `'L': '5.0' is not a whole number` (a whole-number box), `'L' must be a finite number` (`nan`, `inf`), `'L' is required` (empty). SPEC 6 gives only the integer sentence; the others are this host's wording (the float sentence and the not-a-number sentences are not in the spec).
 * A linked pixel size (`PixelSizeOf`) is its own text field with its own rules (positive and finite, see Pixel size); it does not use these limits.
 
@@ -131,7 +134,7 @@ Each of these is deliberate and is written once to QuPath's log (logger `labcons
 ## Not done yet
 * Images are exported at full resolution only (no downsample or pixel-size choice yet); RGB / brightfield images are exported as RGB TIFF.
 * Label images are shown as a preview, not converted to QuPath annotations/detections, and tables are not added to the measurements.
-* No headless/script API, no Windows/macOS testing, no menu entry per tool.
+* No headless/script API, no menu entry per tool. Windows/macOS: informative release-run checks only.
 
 ## Build from source, and test
 Users get the jar from the Releases page (see Install). Developers: `QUPATH=/path/to/QuPath JAVA_HOME=<JDK 25> ./build.sh` writes `target/labconstrictor-qupath-0.1.0.jar` (set `LC_QUPATH_VERSION` for another version) and `target/LabConstrictorTools-all.groovy`.
@@ -139,7 +142,7 @@ Users get the jar from the Releases page (see Install). Developers: `QUPATH=/pat
 **Releases.** `.github/workflows/release.yml` runs when a release is published: it builds `labconstrictor-qupath-<tag>.jar` (the tag is the version in the jar's manifest), starts that jar in QuPath 0.7.0 on a virtual screen (`tests/smoke_jar.sh`: the menu entry exists and the dialog opens), and only then attaches the jar, `LabConstrictorTools-all.groovy` and `SHA256SUMS` to the release and appends the QuPath and Tools versions to its notes. Run it by hand (Actions > release > Run workflow, with a tag name) for a dry run: same build and smoke test, files kept as workflow artifacts, no release. The same jar is then tried on Windows and macOS (`os-smoke` jobs, `tests/smoke_os.sh`, apps registered by `tests/ci_setup_os.sh`): best effort, they never block the release (`publish` waits for the Linux job only).
 
     QUPATH=/path/to/QuPath JAVA_HOME=<JDK 25> ./build.sh        # QuPath 0.7 is built with Java 25
-    QUPATH=/path/to/QuPath LC_HOME=<registry with NucleiSky and CellTracksColab> tests/run_gui_test.sh   # needs xvfb; 21 checks
+    QUPATH=/path/to/QuPath LC_HOME=<registry> BODY=gui_test_playground_body.groovy tests/run_gui_test.sh   # needs xvfb; one body (all of them: tests/run_gui_ci.sh, below)
 
 **The GUI test harness modifies the QuPath installation you point `QUPATH` at**: `tests/run_gui_test.sh` copies the jar into `$QUPATH/lib/app/` and edits `$QUPATH/lib/app/QuPath.cfg` (it adds the jar to `app.classpath`). Use a disposable copy of QuPath, not the one you work in.
 
@@ -160,7 +163,7 @@ The `gui_test_parity_*` bodies need the registered `interactions` app (its Pytho
 
 `BODY=gui_test_parity_trust_body.groovy LC_HOME=<an empty scratch folder named lhome_trust> tests/run_gui_test.sh` writes registry entries that break each trust check and checks that each one is refused with its reason and that a good entry loads (56 checks in CI). The owner checks (an entry or schema file owned by another user, a root-owned entry in your own folder) need a second user `tester` and root or passwordless sudo to `chown`; without them they are skipped with a NOTE, and `LC_REQUIRE_OWNER_CHECKS=1` turns that skip into a failure. CI creates the user and sets the variable, so there the owner checks always run.
 
-`BODY=gui_test_parity_messages_body.groovy tests/run_gui_test.sh` opens a 3-plane TIFF (written with tifffile from `/home/tester/v-napari`) and checks that a refusal is the sentence alone, that a z-stack is refused for a `YX` tool with the Tools sentence and the way out, that a series, z, t and channel counts are named, and when nothing is refused (18 checks).
+`BODY=gui_test_parity_messages_body.groovy tests/run_gui_test.sh` opens a 3-plane TIFF (written with tifffile by the Python of the registered `interactions` app) and checks that a refusal is the sentence alone, that a z-stack is refused for a `YX` tool with the Tools sentence and the way out, that a series, z, t and channel counts are named, and when nothing is refused (18 checks).
 
 `BODY=gui_test_parity_results_body.groovy tests/run_gui_test.sh` builds result tables of 150 000, 100 000, 2 001 and a few rows, with quoted commas, doubled quotes and multi-line cells, and checks the rows shown and the sentence, then the CSV reader on points files and malformed files (issue 17) (12 + 14 checks).
 
@@ -190,7 +193,7 @@ The `gui_test_parity_*` bodies need the registered `interactions` app (its Pytho
 
 `BODY=gui_test_parity_quote_body.groovy LC_HOME=<registry with the interactions app> tests/run_gui_test.sh` (from the repository folder) checks `shellQuote` against every case of `tests/quote_vectors.json` (the file of labconstrictor-tools, copied here), reads the quoted text back with independent readers (the C runtime rules for Windows, a POSIX word reader) and checks the terminal command of the dialog with the operating system set to Windows (13 checks).
 
-`BODY=gui_test_buttons_body.groovy tests/run_gui_test.sh` clicks "Rescan apps" and "Restart worker" (3 checks; on the version before the split the Rescan button threw `MissingMethodException` because a local variable named `rescan` shadowed the method).
+`BODY=gui_test_buttons_body.groovy tests/run_gui_test.sh` clicks "Rescan apps" and "Restart worker" (3 checks).
 
 ### Lint (runs in CI) and what CI does not run
 
@@ -209,7 +212,7 @@ The same workflow fails when a part file (all but the older main script) has 600
     tests/ci_setup_apps.sh /tmp/lc main        # venvs + registry in /tmp/lc/home (needs Python 3.12; PYTHON=python3.12)
     QUPATH=/path/to/QuPath LC_HOME=/tmp/lc/home tests/run_gui_ci.sh [body.groovy ...]
 
-Apps in CI: `interactions` (example app of labconstrictor-tools), `adv` (`tests/adversarial_app`) and the Playground (from its `main`, with CPU PyTorch). **Skipped, with the reason printed:** `gui_test_body.groovy` (NucleiSky and CellTracksColab have no LabConstrictor bridge on their `main` branch yet, so there is nothing to install; the body runs as soon as both are registered in `LC_HOME`). The sample images of the bodies are in `tests/fixtures` (`-Dlc.test.fixtures`).
+Apps in CI: `interactions` (example app of labconstrictor-tools), `adv` (`tests/adversarial_app`) and the Playground (from its `main`, with CPU PyTorch). The sample images of the bodies are in `tests/fixtures` (`-Dlc.test.fixtures`).
 
 ### UI audit (not in CI)
 
@@ -219,5 +222,3 @@ Apps in CI: `interactions` (example app of labconstrictor-tools), `adv` (`tests/
     QUPATH=/path/to/QuPath LC_HOME=/tmp/lc/home LC_APP=interactions LC_APP_TESTS=tests/ui_audit_apps/interactions/lc_tests LC_SHOTS=/tmp/audit tests/run_ui_audit.sh
 
 `tests/ui_audit_apps/` holds the `lc_tests` of the test apps (`gated`, whose parameters are enabled by other parameters, is registered from `tests/ui_audit_apps/gated/app`). All variables, the control table, the check ids and the negative controls (`tests/run_ui_audit_negative.sh`) are in [docs/UI_AUDIT.md](docs/UI_AUDIT.md).
-
-`tests/gui_test_body.groovy` drives the real dialog in QuPath on a virtual screen (project with two calibrated images, both apps) and writes screenshots.
