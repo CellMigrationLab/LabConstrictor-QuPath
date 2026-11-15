@@ -149,7 +149,7 @@ void uaImageExpectations(String name, Map r, Map want, List<String> bad, List<St
     def server = qupath.lib.images.servers.ImageServers.buildServer(r.path as String)
     try {
         if (want.shape != null) {
-            List<Integer> got = server.nChannels > 1 ? [server.nChannels, server.height, server.width] : [server.height, server.width]
+            List<Integer> got = server.nChannels() > 1 ? [server.nChannels(), server.height, server.width] : [server.height, server.width]
             List<Integer> wanted = want.shape.collect { it as int }
             if (wanted.size() == 3 && wanted[0] == 1 && got.size() == 2) wanted = wanted.drop(1)
             if (wanted.size() > 3) unverified << (name + ".shape(" + wanted.size() + "D)")
