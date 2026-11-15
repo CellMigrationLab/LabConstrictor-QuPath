@@ -142,7 +142,7 @@ Users get the jar from the Releases page (see Install). Developers: `QUPATH=/pat
 **Releases.** `.github/workflows/release.yml` runs when a release is published: it builds `labconstrictor-qupath-<tag>.jar` (the tag is the version in the jar's manifest), starts that jar in QuPath 0.7.0 on a virtual screen (`tests/smoke_jar.sh`: the menu entry exists and the dialog opens), and only then attaches the jar, `LabConstrictorTools-all.groovy` and `SHA256SUMS` to the release and appends the QuPath and Tools versions to its notes. Run it by hand (Actions > release > Run workflow, with a tag name) for a dry run: same build and smoke test, files kept as workflow artifacts, no release. The same jar is then tried on Windows and macOS (`os-smoke` jobs, `tests/smoke_os.sh`, apps registered by `tests/ci_setup_os.sh`): best effort, they never block the release (`publish` waits for the Linux job only).
 
     QUPATH=/path/to/QuPath JAVA_HOME=<JDK 25> ./build.sh        # QuPath 0.7 is built with Java 25
-    QUPATH=/path/to/QuPath LC_HOME=<registry with NucleiSky and CellTracksColab> tests/run_gui_test.sh   # needs xvfb; 21 checks
+    QUPATH=/path/to/QuPath LC_HOME=<registry> BODY=gui_test_playground_body.groovy tests/run_gui_test.sh   # needs xvfb; one body (all of them: tests/run_gui_ci.sh, below)
 
 **The GUI test harness modifies the QuPath installation you point `QUPATH` at**: `tests/run_gui_test.sh` copies the jar into `$QUPATH/lib/app/` and edits `$QUPATH/lib/app/QuPath.cfg` (it adds the jar to `app.classpath`). Use a disposable copy of QuPath, not the one you work in.
 
@@ -163,7 +163,7 @@ The `gui_test_parity_*` bodies need the registered `interactions` app (its Pytho
 
 `BODY=gui_test_parity_trust_body.groovy LC_HOME=<an empty scratch folder named lhome_trust> tests/run_gui_test.sh` writes registry entries that break each trust check and checks that each one is refused with its reason and that a good entry loads (56 checks in CI). The owner checks (an entry or schema file owned by another user, a root-owned entry in your own folder) need a second user `tester` and root or passwordless sudo to `chown`; without them they are skipped with a NOTE, and `LC_REQUIRE_OWNER_CHECKS=1` turns that skip into a failure. CI creates the user and sets the variable, so there the owner checks always run.
 
-`BODY=gui_test_parity_messages_body.groovy tests/run_gui_test.sh` opens a 3-plane TIFF (written with tifffile from `/home/tester/v-napari`) and checks that a refusal is the sentence alone, that a z-stack is refused for a `YX` tool with the Tools sentence and the way out, that a series, z, t and channel counts are named, and when nothing is refused (18 checks).
+`BODY=gui_test_parity_messages_body.groovy tests/run_gui_test.sh` opens a 3-plane TIFF (written with tifffile by the Python of the registered `interactions` app) and checks that a refusal is the sentence alone, that a z-stack is refused for a `YX` tool with the Tools sentence and the way out, that a series, z, t and channel counts are named, and when nothing is refused (18 checks).
 
 `BODY=gui_test_parity_results_body.groovy tests/run_gui_test.sh` builds result tables of 150 000, 100 000, 2 001 and a few rows, with quoted commas, doubled quotes and multi-line cells, and checks the rows shown and the sentence, then the CSV reader on points files and malformed files (issue 17) (12 + 14 checks).
 
@@ -193,7 +193,7 @@ The `gui_test_parity_*` bodies need the registered `interactions` app (its Pytho
 
 `BODY=gui_test_parity_quote_body.groovy LC_HOME=<registry with the interactions app> tests/run_gui_test.sh` (from the repository folder) checks `shellQuote` against every case of `tests/quote_vectors.json` (the file of labconstrictor-tools, copied here), reads the quoted text back with independent readers (the C runtime rules for Windows, a POSIX word reader) and checks the terminal command of the dialog with the operating system set to Windows (13 checks).
 
-`BODY=gui_test_buttons_body.groovy tests/run_gui_test.sh` clicks "Rescan apps" and "Restart worker" (3 checks; on the version before the split the Rescan button threw `MissingMethodException` because a local variable named `rescan` shadowed the method).
+`BODY=gui_test_buttons_body.groovy tests/run_gui_test.sh` clicks "Rescan apps" and "Restart worker" (3 checks).
 
 ### Lint (runs in CI) and what CI does not run
 
@@ -212,7 +212,7 @@ The same workflow fails when a part file (all but the older main script) has 600
     tests/ci_setup_apps.sh /tmp/lc main        # venvs + registry in /tmp/lc/home (needs Python 3.12; PYTHON=python3.12)
     QUPATH=/path/to/QuPath LC_HOME=/tmp/lc/home tests/run_gui_ci.sh [body.groovy ...]
 
-Apps in CI: `interactions` (example app of labconstrictor-tools), `adv` (`tests/adversarial_app`) and the Playground (from its `main`, with CPU PyTorch). **Skipped, with the reason printed:** `gui_test_body.groovy` (NucleiSky and CellTracksColab have no LabConstrictor bridge on their `main` branch yet, so there is nothing to install; the body runs as soon as both are registered in `LC_HOME`). The sample images of the bodies are in `tests/fixtures` (`-Dlc.test.fixtures`).
+Apps in CI: `interactions` (example app of labconstrictor-tools), `adv` (`tests/adversarial_app`) and the Playground (from its `main`, with CPU PyTorch). The sample images of the bodies are in `tests/fixtures` (`-Dlc.test.fixtures`).
 
 ### UI audit (not in CI)
 
@@ -222,5 +222,3 @@ Apps in CI: `interactions` (example app of labconstrictor-tools), `adv` (`tests/
     QUPATH=/path/to/QuPath LC_HOME=/tmp/lc/home LC_APP=interactions LC_APP_TESTS=tests/ui_audit_apps/interactions/lc_tests LC_SHOTS=/tmp/audit tests/run_ui_audit.sh
 
 `tests/ui_audit_apps/` holds the `lc_tests` of the test apps (`gated`, whose parameters are enabled by other parameters, is registered from `tests/ui_audit_apps/gated/app`). All variables, the control table, the check ids and the negative controls (`tests/run_ui_audit_negative.sh`) are in [docs/UI_AUDIT.md](docs/UI_AUDIT.md).
-
-`tests/gui_test_body.groovy` drives the real dialog in QuPath on a virtual screen (project with two calibrated images, both apps) and writes screenshots.
