@@ -46,6 +46,7 @@ verdict smoke_jar '^SMOKE OK'
 if grep -q 'no gui' "$summary"; then echo "QuPath did not run the script: the other steps are skipped"; echo "| (other steps) | skipped: QuPath did not run the script |" >> "$summary"; [ -z "${GITHUB_STEP_SUMMARY:-}" ] || cat "$summary" >> "$GITHUB_STEP_SUMMARY"; exit 1; fi
 # 2. OS-specific code paths: each body is appended to the joined script (what tests/run_gui_test.sh does)
 # bodies that write their own registry get a scratch LC_HOME with the name they assert (no associative array: macOS has bash 3.2)
+# the bodies below are also in the pull_request paths of .github/workflows/release.yml (a change to one runs this smoke): keep both lists the same
 scratch_for() { case "$1" in gui_test_parity_trust_body.groovy) echo lhome_trust;; gui_test_parity_lifecycle_body.groovy) echo lhome_life;; gui_test_retention_body.groovy) echo lhome_retention;; esac; }
 for body in gui_test_parity_quote_body.groovy gui_test_parity_trust_body.groovy gui_test_parity_lifecycle_body.groovy gui_test_retention_body.groovy; do
   name="${body%.groovy}"; joined="$LOGS/$name.joined.groovy"
