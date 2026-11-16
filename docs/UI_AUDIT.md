@@ -19,7 +19,7 @@ A driver that presses every control of the LabConstrictor window in QuPath, open
 | `LC_UI_RUN_VIA` | `click` (default) or `call` (`dlg.run()` is called instead of a mouse click on Run; diagnostic) |
 | `LC_UI_SEED` | negative controls only |
 
-The harness modifies the QuPath installation (README): `tests/run_gui_test.sh` copies the jar to `lib/app/labconstrictor-qupath-0.1.0.jar`, edits `lib/app/QuPath.cfg` and keeps the first copy of it as `QuPath.cfg.before_lc_tests`. To restore: move that file back and delete the jar.
+The harness modifies the QuPath installation ([technical reference](REFERENCE.md#build-from-source-and-test)): `tests/run_gui_test.sh` copies the jar to `lib/app/labconstrictor-qupath-0.1.0.jar`, edits `lib/app/QuPath.cfg` and keeps the first copy of it as `QuPath.cfg.before_lc_tests`. To restore: move that file back and delete the jar.
 
 ## How it works
 * **One QuPath launch per phase and per tool** (`panel`, `panel_run`, one `tool` launch per tool) on a COPY of `lc_tests` (a tool that writes into the fixtures cannot spoil the next launch), each under `timeout`. A launch that hangs or crashes becomes FAIL rows for every id of its phase, and the next launch starts. A run that exceeds `LC_UI_TOOL_TIMEOUT` is cancelled, the worker killed and the row is FAIL.

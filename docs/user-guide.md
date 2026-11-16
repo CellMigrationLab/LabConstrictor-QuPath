@@ -15,7 +15,7 @@ Run the tools of your LabConstrictor apps from QuPath: one window lists every in
 
 ## Install
 
-1. Download `labconstrictor-qupath-<version>.jar` from the newest release on the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases).
+1. Download the extension's jar. The current version is `v0.1.0-alpha.7`: [download `labconstrictor-qupath-v0.1.0-alpha.7.jar`](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases/download/v0.1.0-alpha.7/labconstrictor-qupath-v0.1.0-alpha.7.jar). A newer version, when there is one, is at the top of the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases).
 2. Drag the file onto the QuPath window, or copy it into the extensions folder shown in QuPath's Preferences.
 3. Restart QuPath.
 

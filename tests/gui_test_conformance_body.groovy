@@ -108,7 +108,7 @@ Thread.start("lc-gui-test") {
                        idsOf(WS.run_identity.fixtures) + idsOf(WS.async_lookups.fixtures) + idsOf(WS.number_limits.cases)) as List<String>
         def LEDGER = [:]
         ["CF-01", "CF-07", "CF-08", "CF-09", "CF-10", "CF-11", "CF-12", "CF-14"].each { LEDGER[it] = "gui_test_frame_body" }
-        ["CF-02", "CF-03", "CF-04", "CF-05", "CF-06", "CF-13"].each { LEDGER[it] = "n/a: QuPath has no spatial transform (README, coordinate frame)" }
+        ["CF-02", "CF-03", "CF-04", "CF-05", "CF-06", "CF-13"].each { LEDGER[it] = "n/a: QuPath has no spatial transform (docs/REFERENCE.md, coordinate frame)" }
         (1..20).each { LEDGER[String.format("CAL-%02d", it)] = "gui_test_calibration_body" }
         (1..9).each { LEDGER["CAL-T" + it] = "gui_test_calibration_body" }
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13].each { LEDGER[String.format("RET-%02d", it)] = "n/a: run against Tools' retention.prune and its CLI, not a host test (the real prune is exercised by gui_test_retention_body)" }
