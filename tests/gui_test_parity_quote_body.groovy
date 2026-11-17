@@ -97,7 +97,9 @@ Thread.start("lc-gui-test") {
         try { System.setProperty("os.name", "Windows 11"); line = fx { dlg.copyAsCommand("terminal") } } finally { System.setProperty("os.name", realOs) }
         def words = parseWindows(line.readLines().findAll { !it.startsWith("#") }.join(" "))
         expect("windows_terminal_command_gives_the_program_the_typed_value", words.contains("shape=" + typed), [line, words])
-        def posixLine = fx { dlg.copyAsCommand("terminal") }
+        // the same with the operating system set to a POSIX one (the dialog quotes for the machine it runs on: on Windows the real OS gives the Windows line)
+        def posixLine
+        try { System.setProperty("os.name", "Linux"); posixLine = fx { dlg.copyAsCommand("terminal") } } finally { System.setProperty("os.name", realOs) }
         expect("posix_terminal_command_gives_the_shell_the_typed_value", parsePosix(posixLine.readLines().findAll { !it.startsWith("#") }.join(" ")).contains("shape=" + typed), posixLine)
     } catch (Throwable t) { t.printStackTrace(); results["EXCEPTION"] = false }
     finally { println "RESULTS " + results; Thread.sleep(500); System.exit(results && results.every { it.value } ? 0 : 1) }

@@ -1,7 +1,7 @@
 name: qupath-gui
 # The GUI tests (tests/gui_test_*body.groovy) in a real QuPath 0.7 on a virtual screen (Xvfb), the same way tests/run_gui_test.sh runs
 # them locally: the extension jar built from this repo is put on QuPath's class path and each body is run as QuPath's test script.
-# tests/run_gui_ci.sh runs every body, keeps a log per body and fails when any body fails. See README, "Build and test".
+# tests/run_gui_ci.sh runs every body, keeps a log per body and fails when any body fails. See docs/REFERENCE.md, "GUI tests in CI".
 on:
   pull_request:
   workflow_dispatch:
