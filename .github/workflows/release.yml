@@ -1,6 +1,7 @@
 name: release
 # One-click install: when a release is published, this builds labconstrictor-qupath-<tag>.jar with build.sh (Java 25, against the pinned QuPath),
 # runs a smoke test on that exact jar in a real QuPath on a virtual screen (the menu entry exists, the dialog opens), and attaches the jar,
+# the same jar under the fixed name labconstrictor-qupath.jar (so .../releases/latest/download/labconstrictor-qupath.jar is always the newest),
 # LabConstrictorTools-all.groovy and SHA256SUMS to the release; the QuPath version and the minimum Tools version are appended to the notes.
 # Manually (workflow_dispatch, input "tag") or on a pull request that changes this machinery it is a dry run: build, smoke test, files kept as workflow artifacts, nothing is published.
 on:
@@ -70,13 +71,20 @@ jobs:
           [ -n "$MIN_TOOLS" ] || { echo "::error::MIN_TOOLS_VERSION not found in LcCompat.groovy"; exit 1; }
           mkdir release-files
           cp "target/labconstrictor-qupath-$TAG.jar" target/LabConstrictorTools-all.groovy release-files/
-          (cd release-files && sha256sum "labconstrictor-qupath-$TAG.jar" LabConstrictorTools-all.groovy > SHA256SUMS && cat SHA256SUMS)
+          # The same jar under a fixed name, for the address that always gives the newest release:
+          # https://github.com/<owner>/<repo>/releases/latest/download/labconstrictor-qupath.jar
+          # Its name has no dash after "qupath", so the glob labconstrictor-qupath-*.jar (os-smoke) still finds only the versioned jar.
+          cp "target/labconstrictor-qupath-$TAG.jar" release-files/labconstrictor-qupath.jar
+          (cd release-files && sha256sum "labconstrictor-qupath-$TAG.jar" labconstrictor-qupath.jar LabConstrictorTools-all.groovy > SHA256SUMS && cat SHA256SUMS)
+          cmp "release-files/labconstrictor-qupath-$TAG.jar" release-files/labconstrictor-qupath.jar
           {
             echo "<!-- labconstrictor-qupath-build -->"
             echo "### Install"
-            echo "Download \`labconstrictor-qupath-$TAG.jar\`, drag it onto the QuPath window (or copy it into the extensions folder shown in QuPath's Preferences) and restart QuPath. Then use **Extensions > LabConstrictor tools...**. \`LabConstrictorTools-all.groovy\` is the same script as one file for QuPath's Script Editor. \`SHA256SUMS\` lists the checksums."
+            echo "Drag \`labconstrictor-qupath-$TAG.jar\` onto the QuPath window and restart QuPath. Every step, and what to do when something does not work: [QuPath guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/qupath/)."
             echo
-            echo "- Built against **QuPath $QUPATH_VERSION** (Java 25). Tested: QuPath $QUPATH_VERSION on Linux; not tested on Windows or macOS."
+            echo "- \`labconstrictor-qupath.jar\` is the same jar under a fixed name: https://github.com/$GITHUB_REPOSITORY/releases/latest/download/labconstrictor-qupath.jar always gives the newest release."
+            echo "- \`LabConstrictorTools-all.groovy\` is the same script as one file, for QuPath's Script Editor. \`SHA256SUMS\` lists the checksums."
+            echo "- Built against **QuPath $QUPATH_VERSION** (Java 25). The extension has been tested on Linux, Windows and macOS; this jar passed the smoke test in QuPath $QUPATH_VERSION on Linux before it was attached (the Windows and macOS runs are in the summary of the release workflow)."
             echo "- Needs **labconstrictor-tools $MIN_TOOLS or newer** in the LabConstrictor app's environment."
           } > release-files/release-notes-addition.md
           cat release-files/release-notes-addition.md
@@ -105,7 +113,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           cd release-files
-          gh release upload "$TAG" "labconstrictor-qupath-$TAG.jar" LabConstrictorTools-all.groovy SHA256SUMS --clobber
+          gh release upload "$TAG" "labconstrictor-qupath-$TAG.jar" labconstrictor-qupath.jar LabConstrictorTools-all.groovy SHA256SUMS --clobber
           gh release view "$TAG" --json body --jq .body > body.md
           if ! grep -q 'labconstrictor-qupath-build' body.md; then
             { cat body.md; echo; echo; cat release-notes-addition.md; } > notes.md
