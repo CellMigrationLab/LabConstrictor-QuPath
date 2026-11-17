@@ -12,11 +12,12 @@ Run the tools of your LabConstrictor apps from QuPath: one window lists every in
 
 ## Install
 
-1. Download the extension's jar. The current version is `v0.1.0-alpha.7`: [download `labconstrictor-qupath-v0.1.0-alpha.7.jar`](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases/download/v0.1.0-alpha.7/labconstrictor-qupath-v0.1.0-alpha.7.jar). A newer version, when there is one, is at the top of the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases).
-2. Drag the file onto the QuPath window, or copy it into the extensions folder shown in QuPath's Preferences.
-3. Restart QuPath.
+1. **Download the extension.** The current version is `v0.1.0-alpha.7`: [download `labconstrictor-qupath-v0.1.0-alpha.7.jar`](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases/download/v0.1.0-alpha.7/labconstrictor-qupath-v0.1.0-alpha.7.jar). A newer version, when there is one, is at the top of the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-QuPath/releases).
+2. **Add it to QuPath.** Drag the file onto the QuPath window, or copy it into the extensions folder shown in QuPath's Preferences.
+3. **Restart QuPath.** Close QuPath and start it again.
 
-Without the jar: download the single file `LabConstrictorTools-all.groovy` from the same release, open it in QuPath's Script Editor and run it.
+> [!TIP]
+> **Without the jar.** Download the single file `LabConstrictorTools-all.groovy` from the same release, open it in QuPath's Script Editor and run it.
 
 ## Open it
 
@@ -27,21 +28,27 @@ Without the jar: download the single file `LabConstrictorTools-all.groovy` from 
 
 ![The LabConstrictor tools window in QuPath, showing the form of a tool](https://raw.githubusercontent.com/CellMigrationLab/LabConstrictor-QuPath/main/docs/img/qupath-form.png)
 
-Good to know:
-
-- An image input can be the image open in QuPath, another image of the open project, or a file.
-- For a large image, choose the **Image area** to send: the whole image, the selected annotations, or what the viewer shows. Results come back on the right place of the slide. An area of more than 100 million pixels is refused with a message, never shrunk silently: choose a smaller area.
-- Outlines and points found in the open image become annotations, named and classified after the app and the result (for example `StarDist2D:stardist_outlines`). When a tool finds more than 50 outlines they get no names, so that the names do not hide the image.
-- When you run a tool again, it replaces only the annotations it drew itself. Your own annotations are never removed.
-- Tables, values, messages and result images open in a results window. A result image has an **Open in QuPath** button.
-- A progress bar and a **Cancel** button are there while a tool runs.
-- A pixel-size setting is filled in from the image when the image says its pixel size. If it does not, the field stays empty and you type the value.
-- A number outside the allowed range is refused with a message such as `'Threshold' must be <= 10`. It is never changed to fit.
-- If you install another app while QuPath is open, press **Rescan apps**.
+> [!TIP]
+> **Good to know.**
+>
+> - An image input can be the image open in QuPath, another image of the open project, or a file.
+> - For a large image, choose the **Image area** to send: the whole image, the selected annotations, or what the viewer shows. Results come back on the right place of the slide. An area of more than 100 million pixels is refused with a message, never shrunk silently: choose a smaller area.
+> - Outlines and points found in the open image become annotations, named and classified after the app and the result (for example `StarDist2D:stardist_outlines`). When a tool finds more than 50 outlines they get no names, so that the names do not hide the image.
+> - When you run a tool again, it replaces only the annotations it drew itself. Your own annotations are never removed.
+> - Tables, values, messages and result images open in a results window. A result image has an **Open in QuPath** button.
+> - A progress bar and a **Cancel** button are there while a tool runs.
+> - A pixel-size setting is filled in from the image when the image says its pixel size. If it does not, the field stays empty and you type the value.
+> - A number outside the allowed range is refused with a message such as `'Threshold' must be <= 10`. It is never changed to fit.
+> - If you install another app while QuPath is open, press **Rescan apps**.
 
 ## Check that it worked
 
-Install the [Playground](https://cellmigrationlab.github.io/LabConstrictor-Site/apps/labconstrictor-playground/) app, pick it in the window and run its **Feature tour** tool without choosing an image: it makes its own small demo image. You should get the message "Found 16 blob(s)" and a results window with a label image and tables.
+1. Install the [Playground](https://cellmigrationlab.github.io/LabConstrictor-Site/apps/labconstrictor-playground/) app.
+2. In QuPath, choose **Extensions > LabConstrictor tools...** If the window was already open, press **Rescan apps**.
+3. Pick **LabConstrictor Playground**, then its **Feature tour** tool. Do not choose an image: the tool makes its own small demo image.
+4. Press **Run**.
+
+You should get the message "Found 16 blob(s)" and a results window with a label image and tables.
 
 ## If something does not work
 
