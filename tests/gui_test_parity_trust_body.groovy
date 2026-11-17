@@ -52,8 +52,12 @@ mk("trust_interp_world_writable") { e, p -> chmod("777", p[2]) }
 mk("trust_interp_folder_world_writable") { e, p -> chmod("777", p[1]) }
 mk("trust_prefix_world_writable") { e, p -> chmod("777", p[0]) }
 mk("trust_sticky_folder_ok") { e, p -> chmod("1777", p[1]) }
-mk("trust_prefix_is_root") { e, p -> e.prefix = "/"; e.python = "/bin/sh" }
-mk("trust_interp_outside_prefix") { e, p -> e.python = "/bin/sh" }
+// a program that exists on this machine (the registry refuses a missing interpreter before it looks at the prefix) and the root of its file system
+def posix = LcRegistry.isPosixHost()
+def hostProgram = posix ? "/bin/sh" : (System.getenv("ComSpec") ?: "C:\\Windows\\System32\\cmd.exe")
+def hostRoot = new File(hostProgram).toPath().root.toString()
+mk("trust_prefix_is_root") { e, p -> e.prefix = hostRoot; e.python = hostProgram }
+mk("trust_interp_outside_prefix") { e, p -> e.python = hostProgram }
 mk("trust_interp_missing") { e, p -> e.python = new File(p[1], "nothere").path }
 mk("trust_name_with_slash") { e, p -> e.name = "../evil" }
 mk("trust_name_dotdot") { e, p -> e.name = ".." }
@@ -106,12 +110,16 @@ def refused = { String name, String needle ->
 expect("trust_ok_loads", loaded.contains("trust_ok") && problemOf("trust_ok") == null, problems)
 expect("trust_ok_tool_id_with_dot_and_dash_loads", registry.apps["trust_ok"]?.schema?.tools?[0]?.id == "t.one-2")
 expect("trust_sticky_folder_is_not_world_writable", loaded.contains("trust_sticky_folder_ok"), problemOf("trust_sticky_folder_ok"))
-refused("trust_group_writable_entry", "entry file is writable by other users")
-refused("trust_group_writable_schema", "schema file is writable by other users")
-refused("trust_schema_elsewhere", "is not in the same folder as the entry")
-refused("trust_interp_world_writable", "interpreter " + new File(prefixes, "trust_interp_world_writable/bin/python").path + " is writable by everybody")
-refused("trust_interp_folder_world_writable", "interpreter folder")
-refused("trust_prefix_world_writable", "install prefix")
+// POSIX-only rules (the trust vectors of LabConstrictor-Tools docs/HOST_PARITY.md mark them posix_only; the Python registry checks them under os.name == "posix"):
+// Windows has no group/other permission bits, and the registry skips these checks there on purpose
+if (posix) {
+    refused("trust_group_writable_entry", "entry file is writable by other users")
+    refused("trust_group_writable_schema", "schema file is writable by other users")
+    refused("trust_schema_elsewhere", "is not in the same folder as the entry")
+    refused("trust_interp_world_writable", "interpreter " + new File(prefixes, "trust_interp_world_writable/bin/python").path + " is writable by everybody")
+    refused("trust_interp_folder_world_writable", "interpreter folder")
+    refused("trust_prefix_world_writable", "install prefix")
+} else println "NOTE POSIX-only checks skipped on " + System.getProperty("os.name") + " (group/other write bits, schema next to the entry): the registry applies these rules on POSIX only, like the Python registry"
 refused("trust_prefix_is_root", "is a filesystem root")
 refused("trust_interp_outside_prefix", "is not inside the install prefix")
 refused("trust_interp_missing", "not available on this machine (interpreter")

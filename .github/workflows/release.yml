@@ -5,7 +5,9 @@ name: release
 # Manually (workflow_dispatch, input "tag") or on a pull request that changes this machinery it is a dry run: build, smoke test, files kept as workflow artifacts, nothing is published.
 on:
   pull_request:       # a dry run when the release machinery itself changes (never publishes)
-    paths: [".github/workflows/release.yml", "build.sh", "tests/smoke_jar.*"]
+    # the files the smoke jobs run: tests/smoke_os.sh and the test bodies it lists, so a change to them is checked on Windows and macOS too
+    paths: [".github/workflows/release.yml", "build.sh", "tests/smoke_*", "tests/ci_setup_os.sh",
+            "tests/gui_test_parity_quote_body.groovy", "tests/gui_test_parity_trust_body.groovy", "tests/gui_test_parity_lifecycle_body.groovy", "tests/gui_test_retention_body.groovy"]
   release:
     types: [published]
   workflow_dispatch:

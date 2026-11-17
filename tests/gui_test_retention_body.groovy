@@ -221,7 +221,7 @@ def readText = { File f -> f.isFile() ? f.getText("UTF-8") : "<missing " + f.pat
         fx { dlg.setters["gate"](gate10) }
         run(dlg)
         def table = json(new File(newest(runsRoot), "run.json")).results.find { it.type == "table" }
-        expect("RET-10_the_reported_path_is_under_results_and_has_the_data", table != null && new File(table.path as String).isFile() && (table.path as String).startsWith(resultsRoot.path + "/") && new File(table.path as String).text.contains("1,x"), table)
+        expect("RET-10_the_reported_path_is_under_results_and_has_the_data", table != null && new File(table.path as String).isFile() && new File(table.path as String).toPath().normalize().startsWith(resultsRoot.toPath().normalize()) && new File(table.path as String).text.contains("1,x"), table)
         fx { dlg.stage.hide() }
         Thread.sleep(500); settle()
         expect("RET-10_the_file_is_still_there_after_the_window_closed", new File(table.path as String).isFile() && new File(new File(table.path as String).parentFile, ".lc-done.json").isFile(), table.path)
