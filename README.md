@@ -6,7 +6,7 @@ Run the analysis tools of your LabConstrictor apps from inside [QuPath](https://
 
 *The StarDist2D app's "Segment nuclei (H&E / RGB)" tool, run from QuPath: the nuclei it found are annotations on the open image.*
 
-> **Experimental.** This is an alpha pre-release for **QuPath 0.7** (built and tested with QuPath 0.7.0; older QuPath versions are not supported). It has been tested on Linux, Windows and macOS, but expect bugs and changes. Please [tell us](https://github.com/CellMigrationLab/LabConstrictor-QuPath/issues) what you find.
+It works with QuPath 0.7 (older QuPath versions are not supported) and has been tested on Linux, Windows and macOS. Please [tell us](https://github.com/CellMigrationLab/LabConstrictor-QuPath/issues) what you find.
 
 ## Install
 

@@ -2,9 +2,6 @@
 
 Run the tools of your LabConstrictor apps from QuPath: one window lists every installed app, you pick a tool and press Run, and outlines and points come back as annotations on your image.
 
-> [!WARNING]
-> **Experimental.** This extension is an alpha pre-release for QuPath 0.7. It has been tested with QuPath 0.7.0 on Linux, Windows and macOS, but expect bugs and changes, and do not rely on it for work you cannot redo.
-
 ![QuPath with an H&E image: nuclei found by the StarDist2D app are drawn as annotations, next to the LabConstrictor tools window](https://raw.githubusercontent.com/CellMigrationLab/LabConstrictor-QuPath/main/docs/img/qupath-stardist.png)
 
 ## What you need
