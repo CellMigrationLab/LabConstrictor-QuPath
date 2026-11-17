@@ -1,5 +1,5 @@
 /*
- * LabConstrictor tools for QuPath (prototype).
+ * LabConstrictor tools for QuPath.
  *
  * Runs the tools of every installed LabConstrictor app (NucleiSky, CellTracksColab, ...) from QuPath. The form is generated from the
  * tool's declared schema (see https://github.com/CellMigrationLab/LabConstrictor-Tools, docs/PROTOCOL.md); the tool runs in the app's
