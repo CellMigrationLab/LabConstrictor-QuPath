@@ -57,8 +57,8 @@ You should get the message "Found 16 blob(s)" and a results window with a label 
 - **An app is missing from the list.** Press **Rescan apps**: the list of skipped apps says why. The app may not offer its tools in QuPath, it may have been installed with an old installer (install its newest version), or it may need a newer version of this extension (the message names the version to get).
 - **A run fails.** The status line says what failed; **Details...** shows the full report. The log file is `~/.labconstrictor/logs/labconstrictor.log`.
 - **You opened another image while a tool was running.** The results are not drawn on the new image; the status line says where the result files are.
-- **You wonder where results are kept.** In `~/.labconstrictor/results` and `~/.labconstrictor/runs`. Only the newest 20 results and 50 run records are kept; older ones are removed automatically, and only folders that LabConstrictor itself made.
-- **You want to know which apps are found.** `labconstrictor-tools doctor`, run in a terminal, shows which apps are registered.
+- **You wonder where results are kept.** In `~/.labconstrictor/results` and `~/.labconstrictor/runs`. The newest 20 results and 50 run records are kept; older folders that LabConstrictor made are removed automatically.
+- **You want to know which apps are found.** [Check an installed app](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/tools-install/) shows the commands that list the registered apps and say what is wrong with one.
 - **You want to report a bug.** Open an [issue](https://github.com/CellMigrationLab/LabConstrictor-QuPath/issues) with what you ran and what you saw.
 
-Every rule the extension follows: [technical reference](https://github.com/CellMigrationLab/LabConstrictor-QuPath/blob/main/docs/REFERENCE.md). Source code and issues: [LabConstrictor-QuPath](https://github.com/CellMigrationLab/LabConstrictor-QuPath).
+How the extension works, rule by rule: [QuPath extension reference](https://github.com/CellMigrationLab/LabConstrictor-QuPath/blob/main/docs/REFERENCE.md). Source code and issues: [LabConstrictor-QuPath](https://github.com/CellMigrationLab/LabConstrictor-QuPath).
