@@ -61,4 +61,4 @@ You should get the message "Found 16 blob(s)" and a results window with a label 
 - **You want to know which apps are found.** [Check an installed app](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/tools-install/) shows the commands that list the registered apps and say what is wrong with one.
 - **You want to report a bug.** Open an [issue](https://github.com/CellMigrationLab/LabConstrictor-QuPath/issues) with what you ran and what you saw.
 
-How the extension works, rule by rule: [QuPath extension reference](https://github.com/CellMigrationLab/LabConstrictor-QuPath/blob/main/docs/REFERENCE.md). Source code and issues: [LabConstrictor-QuPath](https://github.com/CellMigrationLab/LabConstrictor-QuPath).
+How the extension works, rule by rule: [QuPath extension reference](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/qupath-reference/). Source code and issues: [LabConstrictor-QuPath](https://github.com/CellMigrationLab/LabConstrictor-QuPath).
