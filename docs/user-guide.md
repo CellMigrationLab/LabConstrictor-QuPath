@@ -17,7 +17,7 @@ Run the tools of your LabConstrictor apps from QuPath: one window lists every in
 3. **Restart QuPath.** Close QuPath and start it again.
 
 > [!TIP]
-> **Without the jar.** Download the single file `LabConstrictorTools-all.groovy` from the same release, open it in QuPath's Script Editor and run it.
+> **Without the jar.** Download the single file `LabConstrictorTools-all.groovy` from the same release, open it in QuPath's Script Editor and run it. You need it only if you cannot install the jar: with the jar installed, use the menu entry.
 
 ## Open it
 
@@ -36,6 +36,7 @@ Run the tools of your LabConstrictor apps from QuPath: one window lists every in
 > - Outlines and points found in the open image become annotations, named and classified after the app and the result (for example `StarDist2D:stardist_outlines`). When a tool finds more than 50 outlines they get no names, so that the names do not hide the image.
 > - When you run a tool again, it replaces only the annotations it drew itself. Your own annotations are never removed.
 > - Tables, values, messages and result images open in a results window. A result image has an **Open in QuPath** button.
+> - The files a tool writes go to a folder under `~/.labconstrictor/results`. Only the newest 20 result folders are kept, older ones are deleted automatically: copy a result you want to keep to a folder of your own.
 > - A progress bar and a **Cancel** button are there while a tool runs.
 > - A pixel-size setting is filled in from the image when the image says its pixel size. If it does not, the field stays empty and you type the value.
 > - A number outside the allowed range is refused with a message such as `'Threshold' must be <= 10`. It is never changed to fit.
